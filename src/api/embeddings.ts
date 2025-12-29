@@ -379,19 +379,21 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
       // Retrieve points from the vector store
       const points = await (embeddingService as any).retrievePoints(ids);
 
-      // Filter response based on options
+      // Format response to match search endpoint shape
       // Note: retrievePoints already sanitizes BigInt values to strings
       const results = points.map((point: { id: string; vector: number[]; payload: Record<string, any> }) => {
-        const result: Record<string, any> = {
-          id: point.id,
-        };
+        const result: Record<string, any> = {};
+
+        // Use key from payload (like search does), fallback to id
+        result.key = point.payload?.key || point.id;
 
         if (with_vector && point.vector) {
           result.vector = Array.from(point.vector);
         }
 
-        if (with_payload && point.payload) {
-          result.payload = point.payload;
+        if (with_payload && point.payload?.metadata) {
+          // Return only the metadata object, not internal fields like queueItemId, timestamp, correlationId
+          result.metadata = point.payload.metadata;
         }
 
         return result;
