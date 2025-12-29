@@ -39,6 +39,8 @@ Complete guide for using the `/embeddings/search` endpoint with advanced Qdrant-
 | `k` | number | No | 10 | Number of results to return (1-1000) |
 | `threshold` | number | No | 0.65 | Similarity threshold (0.0-1.0) |
 | `filter` | object | No | - | Advanced filter with must/should/must_not clauses |
+| `with_vector` | boolean | No | false | Include original embedding vectors in results |
+| `with_payload` | boolean | No | true | Include metadata in results |
 
 *Either `searchTerm` OR `vector` must be provided, but not both.
 
@@ -639,7 +641,59 @@ If you already have a vector, use it directly instead of `searchTerm`.
 }
 ```
 
-### Use Case 15: Date Range Filter
+### Use Case 15: Retrieve Original Vectors
+
+Include the original embedding vectors in search results for further processing or analysis.
+
+```json
+{
+  "searchTerm": "machine learning",
+  "k": 5,
+  "with_vector": true
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "results": [
+    {
+      "key": "1234567890",
+      "distance": 0.923,
+      "metadata": { "text": "..." },
+      "vector": [0.0123, -0.0456, 0.0789, ...]
+    }
+  ],
+  "count": 5
+}
+```
+
+### Use Case 16: Search Without Metadata
+
+For performance optimization, exclude metadata when you only need keys and distances.
+
+```json
+{
+  "searchTerm": "neural networks",
+  "k": 100,
+  "with_payload": false
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "results": [
+    { "key": "1234567890", "distance": 0.923 },
+    { "key": "0987654321", "distance": 0.891 }
+  ],
+  "count": 100
+}
+```
+
+### Use Case 17: Date Range Filter
 
 Find embeddings created within a date range.
 
@@ -660,7 +714,7 @@ Find embeddings created within a date range.
 }
 ```
 
-### Use Case 16: Deeply Nested Logic
+### Use Case 18: Deeply Nested Logic
 
 Complex nested conditions for advanced queries. This example matches:
 - Source is "parquet_import" AND either:
@@ -734,7 +788,8 @@ Complex nested conditions for advanced queries. This example matches:
 | `results` | array | Array of search results |
 | `results[].key` | string | Unique identifier for the embedding |
 | `results[].distance` | number | Similarity score (0-1, higher is more similar) |
-| `results[].metadata` | object | All metadata associated with the embedding |
+| `results[].metadata` | object | All metadata associated with the embedding (when `with_payload: true`) |
+| `results[].vector` | number[] | Original embedding vector (only when `with_vector: true`) |
 | `count` | number | Number of results returned |
 
 ### Error Response
