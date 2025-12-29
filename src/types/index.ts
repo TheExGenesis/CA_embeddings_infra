@@ -8,6 +8,7 @@ export interface SearchResult {
   key: string;
   distance: number;
   metadata?: Record<string, any>;
+  vector?: number[];  // Original vector when with_vector=true
 }
 
 // ============================================================================
@@ -92,6 +93,10 @@ export interface SearchQuery {
   threshold?: number;
   /** Filter supporting both new clause-based format and legacy flat format */
   filter?: SearchFilter;
+  /** Return original vectors in results (default: false) */
+  with_vector?: boolean;
+  /** Return metadata/payload in results (default: true) */
+  with_payload?: boolean;
 }
 
 export type VectorStoreType = 'qdrant';

@@ -123,6 +123,8 @@ export const SearchQuerySchema = z.object({
   k: z.number().int().min(1).max(1000).default(10),
   threshold: z.number().min(0).max(1).optional(),
   filter: SearchFilterSchema.optional(),
+  with_vector: z.boolean().optional().default(false),
+  with_payload: z.boolean().optional().default(true),
 }).refine(
   (data) => data.vector || data.searchTerm,
   {
@@ -175,6 +177,19 @@ export const UpdateMetadataSchema = z.object({
   items: z.array(MetadataUpdateItemSchema).min(1).max(10000),
 });
 
+// ============================================================================
+// Retrieve Vector Schema
+// ============================================================================
+
+/**
+ * Schema for retrieving embeddings by IDs
+ */
+export const RetrieveVectorSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(1000),
+  with_vector: z.boolean().optional().default(true),
+  with_payload: z.boolean().optional().default(true),
+});
+
 export const validateVector = (vector: number[], expectedDimension: number): void => {
   if (vector.length !== expectedDimension) {
     throw new Error(`Vector dimension mismatch. Expected ${expectedDimension}, got ${vector.length}`);
@@ -203,3 +218,4 @@ export type EmbeddingGenerationItemInput = z.infer<typeof EmbeddingGenerationIte
 export type GenerateEmbeddingsInput = z.infer<typeof GenerateEmbeddingsSchema>;
 export type MetadataUpdateItemInput = z.infer<typeof MetadataUpdateItemSchema>;
 export type UpdateMetadataInput = z.infer<typeof UpdateMetadataSchema>;
+export type RetrieveVectorInput = z.infer<typeof RetrieveVectorSchema>;

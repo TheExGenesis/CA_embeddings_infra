@@ -5,12 +5,14 @@ import {
   BulkDeleteSchema,
   SearchQuerySchema,
   UpdateMetadataSchema,
+  RetrieveVectorSchema,
   validateVector,
   normalizeVector,
   type BulkInsertInput,
   type BulkDeleteInput,
   type SearchQueryInput,
-  type UpdateMetadataInput
+  type UpdateMetadataInput,
+  type RetrieveVectorInput
 } from '../utils/validation.js';
 import { createContextLogger } from '../observability/logger.js';
 import { appConfig } from '../config/index.js';
@@ -129,6 +131,8 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
         k: request.body.k || 10,
         threshold: request.body.threshold || 0.65,
         filter: request.body.filter,
+        with_vector: request.body.with_vector ?? false,
+        with_payload: request.body.with_payload ?? true,
       });
 
       reply.send({
@@ -307,6 +311,102 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       contextLogger.error({ error: errorMessage }, 'Metadata update failed');
+
+      reply.status(500).send({
+        success: false,
+        error: errorMessage,
+      });
+    }
+  });
+
+  /**
+   * Retrieve embeddings by IDs
+   * POST /embeddings/retrieve
+   * - Open endpoint (no auth required by default)
+   * - Rate limited to 10,000 requests/hour for unauthenticated users
+   * - API key holders bypass rate limit
+   */
+  fastify.post<{
+    Body: RetrieveVectorInput;
+  }>('/embeddings/retrieve', {
+    config: {
+      rateLimit: {
+        max: 10000,
+        timeWindow: '1 hour',
+        keyGenerator: (request: FastifyRequest) => {
+          // If API key present and valid, use unique key per API key (effectively no shared limit)
+          const apiKey = request.headers['x-api-key'] as string | undefined;
+          if (apiKey && appConfig.security.apiKeys.includes(apiKey)) {
+            return `apikey:${apiKey}`;  // Each API key gets own bucket
+          }
+          return request.ip;  // Anonymous users share IP-based limit
+        },
+        errorResponseBuilder: () => ({
+          success: false,
+          error: 'Rate limit exceeded (10,000 requests/hour). Use an API key to bypass this limit.',
+          code: 'RATE_LIMIT_EXCEEDED'
+        })
+      }
+    }
+  }, async (request: FastifyRequest<{ Body: RetrieveVectorInput }>, reply: FastifyReply) => {
+    const correlationId = (request as any).correlationId;
+    const contextLogger = createContextLogger({
+      correlationId,
+      operation: 'retrieve',
+      count: request.body?.ids?.length
+    });
+
+    try {
+      contextLogger.info('Processing retrieve request');
+
+      // Validate request body
+      const parsed = RetrieveVectorSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Invalid request body',
+          details: parsed.error.errors,
+        });
+      }
+
+      const { ids, with_vector, with_payload } = parsed.data;
+
+      // Check if the vector store has retrievePoints method (Qdrant does)
+      if (!('retrievePoints' in embeddingService) || typeof (embeddingService as any).retrievePoints !== 'function') {
+        throw new Error('Retrieve operation not supported by current vector store');
+      }
+
+      // Retrieve points from the vector store
+      const points = await (embeddingService as any).retrievePoints(ids);
+
+      // Filter response based on options
+      // Note: retrievePoints already sanitizes BigInt values to strings
+      const results = points.map((point: { id: string; vector: number[]; payload: Record<string, any> }) => {
+        const result: Record<string, any> = {
+          id: point.id,
+        };
+
+        if (with_vector && point.vector) {
+          result.vector = Array.from(point.vector);
+        }
+
+        if (with_payload && point.payload) {
+          result.payload = point.payload;
+        }
+
+        return result;
+      });
+
+      reply.send({
+        success: true,
+        results,
+        count: results.length,
+      });
+
+      contextLogger.info({ resultCount: results.length }, 'Retrieve completed successfully');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      contextLogger.error({ error: errorMessage }, 'Retrieve failed');
 
       reply.status(500).send({
         success: false,

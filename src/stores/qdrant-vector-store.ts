@@ -239,11 +239,15 @@ export class QdrantVectorStore implements IVectorStore {
       }
       
 
+      const withPayload = query.with_payload ?? true;
+      const withVector = query.with_vector ?? false;
+
       const searchResults = await this.client!.search(this.collectionName, {
         vector: Array.from(query.vector),
         limit: query.k,
         filter,
-        with_payload: true,
+        with_payload: withPayload,
+        with_vector: withVector,
         score_threshold: query.threshold,
         params: {
           hnsw_ef: 128,
@@ -259,28 +263,34 @@ export class QdrantVectorStore implements IVectorStore {
         // Payload structure: { key: string, metadata: {...}, ...otherFields }
         let key: string;
         let metadata: Record<string, any> | undefined;
-        
+
         if (result.payload) {
           const sanitizedPayload = this.sanitizeMetadata(result.payload);
           const { key: payloadKey, metadata: nestedMetadata } = sanitizedPayload;
-          
+
           // Use the original string key from payload (not the numeric ID)
           // This preserves the full precision of large numeric keys
           key = payloadKey as string;
-          
-          metadata = {
+
+          metadata = withPayload ? {
             ...nestedMetadata,
-          };
+          } : undefined;
         } else {
           // Fallback to ID if no payload (shouldn't happen in normal operation)
           const id = result.id;
           key = typeof id === 'bigint' ? (id as bigint).toString() : String(id);
         }
-        
+
+        // Include vector if requested and available
+        const vector = withVector && result.vector
+          ? Array.from(result.vector as number[])
+          : undefined;
+
         return {
           key,
           distance: result.score,
           metadata,
+          vector,
         };
       });
 
@@ -1087,16 +1097,22 @@ export class QdrantVectorStore implements IVectorStore {
     });
     contextLogger.debug('Retrieving points by IDs');
 
+    // Convert string IDs to BigInt for Qdrant (same as other methods)
+    // This preserves precision for large tweet IDs (19+ digits)
+    const bigIntIds = ids.map(id =>
+      typeof id === 'string' ? BigInt(id) as any : id
+    );
+
     const response = await this.client!.retrieve(this.collectionName, {
-      ids: ids,
+      ids: bigIntIds,
       with_payload: true,
       with_vector: true,
     });
 
     return response.map(point => ({
-      id: point.id,
+      id: typeof point.id === 'bigint' ? point.id.toString() : String(point.id),
       vector: point.vector as number[],
-      payload: point.payload as Record<string, any>,
+      payload: this.sanitizeMetadata(point.payload as Record<string, any>),
     }));
   }
 
