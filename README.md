@@ -14,6 +14,20 @@ A high-performance, scalable embeddings serving solution built with TypeScript a
 - **Scalable Architecture**: Built for distributed systems and horizontal scaling
 - **Cloud Backups**: Export vector store to Cloudflare R2 or Supabase Storage via API
 
+## Service retirement observation
+
+The public semantic-search route is scheduled for retirement after August 25,
+2026. During the observation window, search logs include a daily rotating,
+16-character HMAC of client IP plus user agent, a coarse client category, and
+origin/referrer hostnames. Raw IP addresses, full user agents, URL paths, and
+search terms are not logged. The HMAC secret exists only in process memory and
+changes whenever the service restarts.
+
+The web UI and `POST /embeddings/search` return standard `Deprecation`, `Sunset`,
+`Link`, and `Warning` headers. The shutdown is not automatic; operators must
+review observed use, create and verify an off-host Qdrant snapshot, and approve
+the stop separately.
+
 ## 📊 Architecture
 
 ```
