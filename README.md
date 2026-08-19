@@ -14,19 +14,13 @@ A high-performance, scalable embeddings serving solution built with TypeScript a
 - **Scalable Architecture**: Built for distributed systems and horizontal scaling
 - **Cloud Backups**: Export vector store to Cloudflare R2 or Supabase Storage via API
 
-## Service retirement observation
+## Search attribution telemetry
 
-The public semantic-search route is scheduled for retirement after August 25,
-2026. During the observation window, search logs include a daily rotating,
+Search logs include a daily rotating,
 16-character HMAC of client IP plus user agent, a coarse client category, and
 origin/referrer hostnames. Raw IP addresses, full user agents, URL paths, and
 search terms are not logged. The HMAC secret exists only in process memory and
 changes whenever the service restarts.
-
-The web UI and `POST /embeddings/search` return standard `Deprecation`, `Sunset`,
-`Link`, and `Warning` headers. The shutdown is not automatic; operators must
-review observed use, create and verify an off-host Qdrant snapshot, and approve
-the stop separately.
 
 ## 📊 Architecture
 
@@ -61,6 +55,12 @@ the stop separately.
 - Billion-scale vector support
 - Cloud and self-hosted options
 - Best for: Production deployments, advanced filtering needs, distributed systems
+
+**ClickHouse** - Compact analytical vector serving
+- Existing `POST /embeddings/search` request and response contract
+- Binary HNSW index with Qdrant-compatible cosine similarity scores
+- Payload hydration and Qdrant-style metadata filters
+- Best for: Colocating an infrequently queried vector corpus with analytical storage
 
 ## 🛠 Quick Start
 
@@ -191,13 +191,22 @@ GET /metrics             # Prometheus metrics
 | `HOST` | `0.0.0.0` | Server host |
 | `NODE_ENV` | `development` | Environment mode |
 | **Vector Store** | | |
-| `VECTOR_STORE` | `qdrant` | Backend type (currently only `qdrant`) |
+| `VECTOR_STORE` | `qdrant` | Backend type (`qdrant` or `clickhouse`) |
 | `VECTOR_DIMENSION` | `1024` | Vector dimensions |
 | **Qdrant Configuration** | | |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant server URL |
 | `QDRANT_API_KEY` | - | API key (for Qdrant Cloud) |
 | `QDRANT_COLLECTION_NAME` | `embeddings` | Collection name |
 | `QDRANT_TIMEOUT` | `30000` | Request timeout (ms) |
+| **ClickHouse Configuration** | | |
+| `CLICKHOUSE_URL` | `http://localhost:8123` | ClickHouse HTTP endpoint |
+| `CLICKHOUSE_USER` | `default` | ClickHouse user |
+| `CLICKHOUSE_PASSWORD` | - | ClickHouse password |
+| `CLICKHOUSE_DATABASE` | `vector_bench` | Vector database |
+| `CLICKHOUSE_VECTOR_TABLE` | `vectors` | Vector table |
+| `CLICKHOUSE_PAYLOAD_TABLE` | `payloads` | Key and metadata table |
+| `CLICKHOUSE_TIMEOUT` | `30000` | Request timeout (ms) |
+| `CLICKHOUSE_SEARCH_CANDIDATES` | `256` | HNSW candidates retained for exact rescoring |
 | **Observability** | | |
 | `ENABLE_METRICS` | `true` | Enable Prometheus metrics |
 | `ENABLE_TRACING` | `true` | Enable OpenTelemetry tracing |

@@ -20,23 +20,6 @@ body {
     overflow: hidden;
 }
 
-.sunset-notice {
-    padding: 16px 24px;
-    color: #5b3412;
-    background: #fff4d6;
-    border-bottom: 1px solid #e8c978;
-}
-
-.sunset-notice strong {
-    display: block;
-    margin-bottom: 4px;
-}
-
-.sunset-notice a {
-    color: #77460f;
-    font-weight: 600;
-}
-
 .header {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;

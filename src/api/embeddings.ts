@@ -20,7 +20,6 @@ import { apiKeyAuthMiddleware } from '../middleware/index.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import {
-  applySearchDeprecationHeaders,
   getSearchAttribution,
 } from '../utils/search-observability.js';
 
@@ -85,7 +84,6 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
   }>('/embeddings/search', async (request: FastifyRequest<{ Body: SearchQueryInput }>, reply: FastifyReply) => {
     const correlationId = (request as any).correlationId;
     const attribution = getSearchAttribution(request);
-    applySearchDeprecationHeaders(reply);
     const contextLogger = createContextLogger({
       correlationId,
       operation: 'search',

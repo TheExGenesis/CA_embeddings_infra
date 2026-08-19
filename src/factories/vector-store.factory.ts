@@ -1,6 +1,7 @@
 import type { IVectorStore } from '../interfaces/vector-store.interface.js';
 import type { DatabaseConfig } from '../types/index.js';
 import { QdrantVectorStore } from '../stores/qdrant-vector-store.js';
+import { ClickHouseVectorStore } from '../stores/clickhouse-vector-store.js';
 
 /**
  * Factory function to create the appropriate vector store implementation
@@ -14,11 +15,13 @@ export function createVectorStore(config: DatabaseConfig): IVectorStore {
   switch (config.type) {
     case 'qdrant':
       return new QdrantVectorStore(config);
+
+    case 'clickhouse':
+      return new ClickHouseVectorStore(config);
     
     default:
       throw new Error(
-        `Unsupported vector store type: ${config.type}. Supported types: qdrant`
+        `Unsupported vector store type: ${config.type}. Supported types: qdrant, clickhouse`
       );
   }
 }
-

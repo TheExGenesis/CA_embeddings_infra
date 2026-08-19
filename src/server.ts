@@ -16,7 +16,6 @@ import { logger } from './observability/logger.js';
 import { initializeTracing, shutdownTracing } from './observability/tracing.js';
 import { initializeMetrics, closeMetrics } from './observability/metrics.js';
 import { appConfig } from './config/index.js';
-import { applySearchDeprecationHeaders } from './utils/search-observability.js';
 
 export async function createServer() {
   initializeTracing();
@@ -145,7 +144,6 @@ export async function createServer() {
 
   // Explicit routes for static files to ensure they're served
   fastify.get('/', async (request, reply) => {
-    applySearchDeprecationHeaders(reply);
     return reply.sendFile('index.html');
   });
   

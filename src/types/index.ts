@@ -99,7 +99,7 @@ export interface SearchQuery {
   with_payload?: boolean;
 }
 
-export type VectorStoreType = 'qdrant';
+export type VectorStoreType = 'qdrant' | 'clickhouse';
 
 export interface QdrantConfig {
   url: string;
@@ -109,11 +109,24 @@ export interface QdrantConfig {
   timeout?: number;
 }
 
+export interface ClickHouseConfig {
+  url: string;
+  user: string;
+  password?: string;
+  database: string;
+  vectorTable: string;
+  payloadTable: string;
+  timeout?: number;
+  searchCandidates?: number;
+}
+
 export interface DatabaseConfig {
   type: VectorStoreType;
   dimension: number;
   // Qdrant-specific config
   qdrant?: QdrantConfig;
+  // ClickHouse-specific config
+  clickhouse?: ClickHouseConfig;
 }
 
 export interface ServerConfig {

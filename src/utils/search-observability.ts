@@ -1,10 +1,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyRequest } from 'fastify';
 
 const runtimeClientHashSecret = randomBytes(32);
-
-export const SEARCH_SUNSET_AT = '2026-08-25T19:00:00.000Z';
-export const SEARCH_DEPRECATION_URL = 'https://github.com/TheExGenesis/community-archive/issues';
 
 export type SearchClientType = 'browser' | 'api_client' | 'bot' | 'unknown';
 export type SearchTrafficSource = 'same_site_ui' | 'external_referrer' | 'direct_api';
@@ -85,20 +82,4 @@ export function getSearchAttribution(
     ...(originHost ? { originHost } : {}),
     ...(referrerHost ? { referrerHost } : {}),
   };
-}
-
-export function getSearchDeprecationHeaders(): Record<string, string> {
-  const deprecationTimestamp = Math.floor(new Date(SEARCH_SUNSET_AT).getTime() / 1000);
-  return {
-    Deprecation: `@${deprecationTimestamp}`,
-    Sunset: new Date(SEARCH_SUNSET_AT).toUTCString(),
-    Link: `<${SEARCH_DEPRECATION_URL}>; rel="deprecation"`,
-    Warning: '299 - "Semantic search is planned for retirement after August 25, 2026"',
-  };
-}
-
-export function applySearchDeprecationHeaders(reply: FastifyReply): void {
-  for (const [name, value] of Object.entries(getSearchDeprecationHeaders())) {
-    reply.header(name, value);
-  }
 }
