@@ -31,10 +31,10 @@ describe('ClickHouseVectorStore', () => {
       '{"id":"42","score":0.91}\n',
       '{"id":"42","key":"42","metadata":"{\\"text\\":\\"hello\\"}"}\n',
     ];
-    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
       requests.push(String(init?.body ?? ''));
       return new Response(responses.shift() ?? '', { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const store = new ClickHouseVectorStore(config);
     await store.initialize();
@@ -46,6 +46,8 @@ describe('ClickHouseVectorStore', () => {
 
     expect(results).toEqual([{ key: '42', distance: 0.91, metadata: { text: 'hello' } }]);
     expect(requests[2]).toContain("1 - cosineDistance");
+    expect(requests[2]).toContain("CAST(embedding, 'Array(Float32)')");
+    expect(requests[2]).toContain('LIMIT 20');
     expect(requests[2]).toContain('hnsw_candidate_list_size_for_search = 256');
     expect(requests[2]).not.toContain('>= 0.65');
   });
@@ -57,10 +59,10 @@ describe('ClickHouseVectorStore', () => {
       '',
       '',
     ];
-    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
       requests.push(String(init?.body ?? ''));
       return new Response(responses.shift() ?? '', { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const store = new ClickHouseVectorStore(config);
     await store.initialize();

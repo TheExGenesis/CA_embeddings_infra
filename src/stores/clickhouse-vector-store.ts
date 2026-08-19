@@ -243,18 +243,30 @@ export class ClickHouseVectorStore implements IVectorStore {
       const vector = Array.from(query.vector, value => Number(value));
       if (vector.some(value => !Number.isFinite(value))) throw new Error('Vector contains invalid values');
       const reference = `CAST([${vector.join(',')}], 'Array(BFloat16)')`;
-      const where: string[] = [];
+      const candidateWhere: string[] = [];
       if (query.filter) {
-        where.push(`id IN (SELECT id FROM ${this.payloads} FINAL WHERE ${filterExpression(query.filter)})`);
+        candidateWhere.push(`id IN (SELECT id FROM ${this.payloads} FINAL WHERE ${filterExpression(query.filter)})`);
       }
-      const score = `1 - cosineDistance(embedding, ${reference})`;
+      const candidateLimit = Math.max(query.k * 2, query.k);
+      const searchCandidates = Math.max(this.candidates, candidateLimit);
+      const exactDistance = `cosineDistance(CAST(embedding, 'Array(Float32)'), CAST(reference, 'Array(Float32)'))`;
+      const score = `1 - ${exactDistance}`;
       const resultRows = await this.rows(`
+        WITH ${reference} AS reference,
+        candidates AS
+        (
+          SELECT id
+          FROM ${this.vectors}
+          ${candidateWhere.length ? `WHERE ${candidateWhere.join(' AND ')}` : ''}
+          ORDER BY cosineDistance(embedding, reference)
+          LIMIT ${candidateLimit}
+        )
         SELECT toString(id) AS id, ${score} AS score${query.with_vector ? ', embedding AS vector' : ''}
         FROM ${this.vectors}
-        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-        ORDER BY cosineDistance(embedding, ${reference})
+        WHERE id IN candidates
+        ORDER BY ${exactDistance}
         LIMIT ${Math.max(1, Math.floor(query.k))}
-        SETTINGS hnsw_candidate_list_size_for_search = ${this.candidates}
+        SETTINGS hnsw_candidate_list_size_for_search = ${searchCandidates}
       `);
 
       const ids = resultRows.map(row => String(row.id));
