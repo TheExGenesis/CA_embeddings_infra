@@ -10,7 +10,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 
   // Vector store configuration
-  VECTOR_STORE: z.enum(['qdrant']).default('qdrant'),
+  VECTOR_STORE: z.enum(['qdrant', 'clickhouse', 'lancedb']).default('qdrant'),
   VECTOR_DIMENSION: z.string().default('1024').transform(Number),
 
   // Qdrant-specific configuration
@@ -19,6 +19,26 @@ const envSchema = z.object({
   QDRANT_PORT: z.string().default('6333').transform(Number),
   QDRANT_COLLECTION_NAME: z.string().default('embeddings'),
   QDRANT_TIMEOUT: z.string().default('30000').transform(Number),
+
+  // ClickHouse-specific configuration
+  CLICKHOUSE_URL: z.string().default('http://localhost:8123'),
+  CLICKHOUSE_USER: z.string().default('default'),
+  CLICKHOUSE_PASSWORD: z.string().optional(),
+  CLICKHOUSE_DATABASE: z.string().default('vector_bench'),
+  CLICKHOUSE_VECTOR_TABLE: z.string().default('vectors'),
+  CLICKHOUSE_PAYLOAD_TABLE: z.string().default('payloads'),
+  CLICKHOUSE_TIMEOUT: z.string().default('30000').transform(Number),
+  CLICKHOUSE_SEARCH_CANDIDATES: z.string().default('256').transform(Number),
+
+  // LanceDB-specific configuration. ClickHouse remains the payload and
+  // write-through rollback store when LanceDB serves vector searches.
+  LANCEDB_URI: z.string().default('./data/lancedb'),
+  LANCEDB_TABLE: z.string().default('vectors'),
+  LANCEDB_NPROBES: z.string().default('64').transform(Number),
+  LANCEDB_REFINE_FACTOR: z.string().default('2').transform(Number),
+  LANCEDB_WRITE_THROUGH_CLICKHOUSE: z.string().default('true').transform(val => val === 'true'),
+  LANCEDB_OPTIMIZE_AFTER_ROWS: z.string().default('100000').transform(Number),
+  LANCEDB_OPTIMIZE_AFTER_MUTATIONS: z.string().default('1000').transform(Number),
 
   ENABLE_METRICS: z.string().default('true').transform(val => val === 'true'),
   METRICS_PORT: z.string().default('9090').transform(Number),
@@ -87,6 +107,25 @@ export const appConfig: AppConfig = {
       port: env.QDRANT_PORT,
       collectionName: env.QDRANT_COLLECTION_NAME,
       timeout: env.QDRANT_TIMEOUT,
+    },
+    clickhouse: {
+      url: env.CLICKHOUSE_URL,
+      user: env.CLICKHOUSE_USER,
+      password: env.CLICKHOUSE_PASSWORD,
+      database: env.CLICKHOUSE_DATABASE,
+      vectorTable: env.CLICKHOUSE_VECTOR_TABLE,
+      payloadTable: env.CLICKHOUSE_PAYLOAD_TABLE,
+      timeout: env.CLICKHOUSE_TIMEOUT,
+      searchCandidates: env.CLICKHOUSE_SEARCH_CANDIDATES,
+    },
+    lancedb: {
+      uri: env.LANCEDB_URI,
+      table: env.LANCEDB_TABLE,
+      nprobes: env.LANCEDB_NPROBES,
+      refineFactor: env.LANCEDB_REFINE_FACTOR,
+      writeThroughClickHouse: env.LANCEDB_WRITE_THROUGH_CLICKHOUSE,
+      optimizeAfterRows: env.LANCEDB_OPTIMIZE_AFTER_ROWS,
+      optimizeAfterMutations: env.LANCEDB_OPTIMIZE_AFTER_MUTATIONS,
     },
   },
   observability: {

@@ -14,7 +14,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o qdrant_downloader qdra
 
 FROM base AS deps
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+# Alpine loads the musl LanceDB binding; omit the unused glibc binary.
+RUN bun install --frozen-lockfile --production \
+  && rm -rf /app/node_modules/@lancedb/lancedb-linux-x64-gnu
 
 FROM base AS build
 COPY package.json bun.lock ./
@@ -27,7 +29,6 @@ RUN addgroup --system --gid 1001 ca_embed
 RUN adduser --system --uid 1001 ca_embed
 
 COPY --from=deps --chown=ca_embed:ca_embed /app/node_modules ./node_modules
-COPY --from=build --chown=ca_embed:ca_embed /app/dist ./dist
 COPY --from=build --chown=ca_embed:ca_embed /app/src ./src
 COPY --from=build --chown=ca_embed:ca_embed /app/package.json ./
 

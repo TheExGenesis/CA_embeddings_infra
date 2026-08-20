@@ -19,6 +19,9 @@ import { appConfig } from '../config/index.js';
 import { apiKeyAuthMiddleware } from '../middleware/index.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import {
+  getSearchAttribution,
+} from '../utils/search-observability.js';
 
 // Track active export process
 let activeExportProcess: ChildProcess | null = null;
@@ -80,9 +83,11 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
     Body: SearchQueryInput;
   }>('/embeddings/search', async (request: FastifyRequest<{ Body: SearchQueryInput }>, reply: FastifyReply) => {
     const correlationId = (request as any).correlationId;
+    const attribution = getSearchAttribution(request);
     const contextLogger = createContextLogger({
       correlationId,
       operation: 'search',
+      ...attribution,
       k: request.body.k,
       hasVector: !!request.body.vector,
       hasSearchTerm: !!request.body.searchTerm

@@ -14,6 +14,14 @@ A high-performance, scalable embeddings serving solution built with TypeScript a
 - **Scalable Architecture**: Built for distributed systems and horizontal scaling
 - **Cloud Backups**: Export vector store to Cloudflare R2 or Supabase Storage via API
 
+## Search attribution telemetry
+
+Search logs include a daily rotating,
+16-character HMAC of client IP plus user agent, a coarse client category, and
+origin/referrer hostnames. Raw IP addresses, full user agents, URL paths, and
+search terms are not logged. The HMAC secret exists only in process memory and
+changes whenever the service restarts.
+
 ## 📊 Architecture
 
 ```
@@ -47,6 +55,21 @@ A high-performance, scalable embeddings serving solution built with TypeScript a
 - Billion-scale vector support
 - Cloud and self-hosted options
 - Best for: Production deployments, advanced filtering needs, distributed systems
+
+**ClickHouse** - Compact analytical vector serving
+- Existing `POST /embeddings/search` request and response contract
+- Binary HNSW index with Qdrant-compatible cosine similarity scores
+- Payload hydration and Qdrant-style metadata filters
+- Best for: Colocating an infrequently queried vector corpus with analytical storage
+
+**LanceDB** - Disk-first local vector serving
+- Cosine IVF-RQ index with one-bit RaBitQ candidate search and exact refinement
+- ClickHouse payload hydration and filtered-search fallback preserve the API contract
+- Inserts and deletes write through to ClickHouse so rollback remains current
+- Best for: Low-memory, low-latency unfiltered semantic search on a single SSD host
+
+Production configuration, validation gates, monitoring and rollback are documented
+in [`ops/lancedb-vector/README.md`](ops/lancedb-vector/README.md).
 
 ## 🛠 Quick Start
 
@@ -136,14 +159,15 @@ Content-Type: application/json
   "vector": [0.1, 0.2, 0.3, ...],
   "k": 10,
   "threshold": 0.8,
-  "filter": {              # Optional: Qdrant only
+  "filter": {              # Optional metadata filter
     "category": "technology",
     "year": 2024
   }
 }
 ```
 
-**Note**: Advanced metadata filtering is fully supported with Qdrant.
+**Note**: LanceDB routes metadata-filtered searches through ClickHouse so the
+existing filter behavior is preserved.
 
 **For detailed search API documentation with advanced filtering examples, see [docs/SEARCH_API.md](docs/SEARCH_API.md).**
 
@@ -177,13 +201,30 @@ GET /metrics             # Prometheus metrics
 | `HOST` | `0.0.0.0` | Server host |
 | `NODE_ENV` | `development` | Environment mode |
 | **Vector Store** | | |
-| `VECTOR_STORE` | `qdrant` | Backend type (currently only `qdrant`) |
+| `VECTOR_STORE` | `qdrant` | Backend type (`qdrant`, `clickhouse`, or `lancedb`) |
 | `VECTOR_DIMENSION` | `1024` | Vector dimensions |
 | **Qdrant Configuration** | | |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant server URL |
 | `QDRANT_API_KEY` | - | API key (for Qdrant Cloud) |
 | `QDRANT_COLLECTION_NAME` | `embeddings` | Collection name |
 | `QDRANT_TIMEOUT` | `30000` | Request timeout (ms) |
+| **ClickHouse Configuration** | | |
+| `CLICKHOUSE_URL` | `http://localhost:8123` | ClickHouse HTTP endpoint |
+| `CLICKHOUSE_USER` | `default` | ClickHouse user |
+| `CLICKHOUSE_PASSWORD` | - | ClickHouse password |
+| `CLICKHOUSE_DATABASE` | `vector_bench` | Vector database |
+| `CLICKHOUSE_VECTOR_TABLE` | `vectors` | Vector table |
+| `CLICKHOUSE_PAYLOAD_TABLE` | `payloads` | Key and metadata table |
+| `CLICKHOUSE_TIMEOUT` | `30000` | Request timeout (ms) |
+| `CLICKHOUSE_SEARCH_CANDIDATES` | `256` | HNSW candidates retained for exact rescoring |
+| **LanceDB Configuration** | | |
+| `LANCEDB_URI` | `./data/lancedb` | Local LanceDB database directory |
+| `LANCEDB_TABLE` | `vectors` | Lance table containing IDs and vectors |
+| `LANCEDB_NPROBES` | `64` | IVF partitions probed per search |
+| `LANCEDB_REFINE_FACTOR` | `2` | Full-vector exact reranking multiplier |
+| `LANCEDB_WRITE_THROUGH_CLICKHOUSE` | `true` | Keep ClickHouse current for rollback |
+| `LANCEDB_OPTIMIZE_AFTER_ROWS` | `100000` | Modified-row threshold for background optimize |
+| `LANCEDB_OPTIMIZE_AFTER_MUTATIONS` | `1000` | Mutation-operation threshold for background optimize |
 | **Observability** | | |
 | `ENABLE_METRICS` | `true` | Enable Prometheus metrics |
 | `ENABLE_TRACING` | `true` | Enable OpenTelemetry tracing |
