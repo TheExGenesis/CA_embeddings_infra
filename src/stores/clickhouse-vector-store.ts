@@ -25,6 +25,12 @@ type RetrievedPoint = {
   payload: { key: string; metadata?: Record<string, unknown> };
 };
 
+export type RetrievedPayload = {
+  id: string;
+  key: string;
+  metadata?: Record<string, unknown>;
+};
+
 const NUMERIC_KEY = /^\d+$/;
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -357,6 +363,26 @@ export class ClickHouseVectorStore implements IVectorStore {
           key: String(payload?.key ?? id),
           ...(parseMetadata(payload?.metadata) ? { metadata: parseMetadata(payload?.metadata) } : {}),
         },
+      };
+    });
+  }
+
+  async retrievePayloads(ids: string[]): Promise<RetrievedPayload[]> {
+    this.ensureInitialized();
+    if (!ids.length) return [];
+    const numericIds = ids.map(parseNumericKey);
+    const payloadRows = await this.rows(`
+      SELECT toString(id) AS id, key, metadata
+      FROM ${this.payloads} FINAL
+      WHERE id IN (${numericIds.join(',')})
+    `);
+    return payloadRows.map(row => {
+      const id = String(row.id);
+      const metadata = parseMetadata(row.metadata);
+      return {
+        id,
+        key: String(row.key ?? id),
+        ...(metadata ? { metadata } : {}),
       };
     });
   }
