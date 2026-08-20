@@ -23,11 +23,11 @@ Keep ClickHouse loopback-only or on the private Docker network. Never expose
 ports 8123 or 9000 publicly. The API health endpoint checks table availability,
 and the ClickHouse container must use an `unless-stopped` restart policy.
 
-Before cutover, verify vector and payload count parity, replay representative
-searches, and capture the current application container name. Keep the stopped
-Qdrant container and its volume as the rollback boundary.
+Before a LanceDB cutover, verify vector and payload count parity, replay
+representative searches, and capture the current ClickHouse-backed application
+container name. Keep ClickHouse running and current as the rollback boundary.
 
-Rollback is: stop the ClickHouse-backed application, restart Qdrant, restore
-the prior application configuration/container, then verify `/health` and one
-authenticated text search. Stopping Qdrant never authorizes deleting its
-container, volume, or snapshots.
+Rollback from LanceDB is: restore `VECTOR_STORE=clickhouse`, restart the prior
+application configuration/container, then verify `/health` and one
+authenticated text search. A LanceDB cutover never authorizes deleting the
+ClickHouse vector or payload tables.

@@ -99,7 +99,7 @@ export interface SearchQuery {
   with_payload?: boolean;
 }
 
-export type VectorStoreType = 'qdrant' | 'clickhouse';
+export type VectorStoreType = 'qdrant' | 'clickhouse' | 'lancedb';
 
 export interface QdrantConfig {
   url: string;
@@ -120,6 +120,16 @@ export interface ClickHouseConfig {
   searchCandidates?: number;
 }
 
+export interface LanceDbConfig {
+  uri: string;
+  table: string;
+  nprobes: number;
+  refineFactor: number;
+  writeThroughClickHouse: boolean;
+  optimizeAfterRows: number;
+  optimizeAfterMutations: number;
+}
+
 export interface DatabaseConfig {
   type: VectorStoreType;
   dimension: number;
@@ -127,6 +137,8 @@ export interface DatabaseConfig {
   qdrant?: QdrantConfig;
   // ClickHouse-specific config
   clickhouse?: ClickHouseConfig;
+  // LanceDB vector search with ClickHouse payload hydration/write-through
+  lancedb?: LanceDbConfig;
 }
 
 export interface ServerConfig {

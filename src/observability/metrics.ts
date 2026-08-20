@@ -121,6 +121,44 @@ export const collectionIndexedPercentage = new Gauge({
   registers: [register],
 });
 
+export const lanceDbIndexedRows = new Gauge({
+  name: 'lancedb_indexed_rows',
+  help: 'Number of LanceDB rows covered by the active vector index',
+  registers: [register],
+});
+
+export const lanceDbUnindexedRows = new Gauge({
+  name: 'lancedb_unindexed_rows',
+  help: 'Number of LanceDB rows not yet covered by the active vector index',
+  registers: [register],
+});
+
+export const lanceDbClickHouseVectorGap = new Gauge({
+  name: 'lancedb_clickhouse_vector_count_gap',
+  help: 'Signed LanceDB vector count minus ClickHouse vector count',
+  registers: [register],
+});
+
+export const lanceDbOptimizeTotal = new Counter({
+  name: 'lancedb_optimize_total',
+  help: 'LanceDB background optimize operations by status',
+  labelNames: ['status'],
+  registers: [register],
+});
+
+export const lanceDbFilterFallbackTotal = new Counter({
+  name: 'lancedb_filter_fallback_total',
+  help: 'Filtered LanceDB searches served by the ClickHouse compatibility path',
+  registers: [register],
+});
+
+export const lanceDbWriteThroughTotal = new Counter({
+  name: 'lancedb_write_through_total',
+  help: 'LanceDB mutation synchronization attempts after the ClickHouse rollback write',
+  labelNames: ['operation', 'status'],
+  registers: [register],
+});
+
 // Queue metrics
 export const queueDepth = new Gauge({
   name: 'embedding_queue_depth',
