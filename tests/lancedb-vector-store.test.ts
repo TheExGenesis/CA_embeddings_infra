@@ -39,6 +39,10 @@ async function createIndexedDatabase(): Promise<string> {
     config: Index.ivfRq({ distanceType: 'cosine', numPartitions: 1, numBits: 1 }),
     waitTimeoutSeconds: 60,
   });
+  await table.createIndex('id', {
+    config: Index.btree(),
+    waitTimeoutSeconds: 60,
+  });
   connection.close();
   return directory;
 }
@@ -53,6 +57,7 @@ function config(uri: string): DatabaseConfig {
       nprobes: 1,
       refineFactor: 2,
       autoOptimize: true,
+      scalarIndexRefreshAfterRows: 100_000,
       optimizeAfterRows: 100_000,
       optimizeAfterMutations: 20,
     },
@@ -134,5 +139,30 @@ describe('LanceDbVectorStore', () => {
     await store.delete([unsignedKey]);
     expect(await store.exists(unsignedKey)).toBe(false);
     await store.close();
+  });
+
+  it('refreshes only the id B-tree after the scalar threshold', async () => {
+    const uri = await createIndexedDatabase();
+    installClickHouseMock([]);
+    const storeConfig = config(uri);
+    storeConfig.lancedb!.autoOptimize = false;
+    storeConfig.lancedb!.scalarIndexRefreshAfterRows = 1;
+    const store = new LanceDbVectorStore(storeConfig);
+    await store.initialize();
+
+    await store.insert([{
+      key: '513',
+      vector: new Float32Array([0, 0, 1, 0, 0, 0, 0, 0]),
+    }]);
+    await store.close();
+
+    const connection = await lancedb.connect(uri);
+    const table = await connection.openTable('vectors');
+    const scalarStats = await table.indexStats('id_idx');
+    const vectorStats = await table.indexStats('vector_idx');
+    expect(scalarStats?.numUnindexedRows).toBe(0);
+    expect(vectorStats?.numUnindexedRows).toBe(1);
+    table.close();
+    connection.close();
   });
 });

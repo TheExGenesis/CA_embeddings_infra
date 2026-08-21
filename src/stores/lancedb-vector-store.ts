@@ -18,6 +18,9 @@ import {
   lanceDbFilteredSearchTotal,
   lanceDbIndexedRows,
   lanceDbOptimizeTotal,
+  lanceDbScalarIndexedRows,
+  lanceDbScalarIndexRefreshTotal,
+  lanceDbScalarUnindexedRows,
   lanceDbUnindexedRows,
   lanceDbMutationTotal,
   vectorCount,
@@ -136,6 +139,7 @@ export class LanceDbVectorStore implements IVectorStore {
   private readonly nprobes: number;
   private readonly refineFactor: number;
   private readonly autoOptimize: boolean;
+  private readonly scalarIndexRefreshAfterRows: number;
   private readonly filterCandidates: number;
   private readonly optimizeAfterRows: number;
   private readonly optimizeAfterMutations: number;
@@ -143,8 +147,10 @@ export class LanceDbVectorStore implements IVectorStore {
   private connection?: Connection;
   private table?: Table;
   private modifiedRows = 0;
+  private scalarModifiedRows = 0;
   private mutationOperations = 0;
   private optimizePromise?: Promise<void>;
+  private scalarIndexRefreshPromise?: Promise<void>;
 
   constructor(config: DatabaseConfig) {
     if (!config.lancedb) throw new Error('LanceDB configuration is required');
@@ -155,6 +161,7 @@ export class LanceDbVectorStore implements IVectorStore {
     this.nprobes = Math.max(1, Math.floor(config.lancedb.nprobes));
     this.refineFactor = Math.max(1, Math.floor(config.lancedb.refineFactor));
     this.autoOptimize = config.lancedb.autoOptimize;
+    this.scalarIndexRefreshAfterRows = Math.max(0, Math.floor(config.lancedb.scalarIndexRefreshAfterRows));
     this.filterCandidates = Math.max(1, Math.floor(config.tweetClickhouse.filterCandidates));
     this.optimizeAfterRows = Math.max(1, Math.floor(config.lancedb.optimizeAfterRows));
     this.optimizeAfterMutations = Math.max(1, Math.floor(config.lancedb.optimizeAfterMutations));
@@ -184,20 +191,41 @@ export class LanceDbVectorStore implements IVectorStore {
 
   private async updateIndexMetrics(): Promise<void> {
     const table = this.currentTable();
-    const index = (await table.listIndices()).find(item => item.columns.includes('vector'));
-    if (!index) return;
-    const stats = await table.indexStats(index.name);
-    if (!stats) return;
-    lanceDbIndexedRows.set(stats.numIndexedRows);
-    lanceDbUnindexedRows.set(stats.numUnindexedRows);
-    const total = stats.numIndexedRows + stats.numUnindexedRows;
-    collectionIndexedPercentage.set(
-      { collection: this.tableName },
-      total === 0 ? 100 : (stats.numIndexedRows / total) * 100,
-    );
+    const indices = await table.listIndices();
+    const vectorIndex = indices.find(item => item.columns.includes('vector'));
+    if (vectorIndex) {
+      const stats = await table.indexStats(vectorIndex.name);
+      if (stats) {
+        lanceDbIndexedRows.set(stats.numIndexedRows);
+        lanceDbUnindexedRows.set(stats.numUnindexedRows);
+        const total = stats.numIndexedRows + stats.numUnindexedRows;
+        collectionIndexedPercentage.set(
+          { collection: this.tableName },
+          total === 0 ? 100 : (stats.numIndexedRows / total) * 100,
+        );
+      }
+    }
+    const scalarIndex = indices.find(item => item.columns.length === 1 && item.columns[0] === 'id');
+    if (scalarIndex) {
+      const stats = await table.indexStats(scalarIndex.name);
+      if (stats) {
+        lanceDbScalarIndexedRows.set(stats.numIndexedRows);
+        lanceDbScalarUnindexedRows.set(stats.numUnindexedRows);
+        this.scalarModifiedRows = Math.max(this.scalarModifiedRows, stats.numUnindexedRows);
+      }
+    }
   }
 
   private recordMutation(rows: number): void {
+    this.scalarModifiedRows += rows;
+    if (
+      !this.autoOptimize &&
+      this.scalarIndexRefreshAfterRows > 0 &&
+      !this.scalarIndexRefreshPromise &&
+      this.scalarModifiedRows >= this.scalarIndexRefreshAfterRows
+    ) {
+      this.scalarIndexRefreshPromise = this.refreshScalarIndexInBackground();
+    }
     if (!this.autoOptimize) return;
     this.modifiedRows += rows;
     this.mutationOperations += 1;
@@ -206,6 +234,27 @@ export class LanceDbVectorStore implements IVectorStore {
       (this.modifiedRows >= this.optimizeAfterRows || this.mutationOperations >= this.optimizeAfterMutations)
     ) {
       this.optimizePromise = this.optimizeInBackground();
+    }
+  }
+
+  private async refreshScalarIndexInBackground(): Promise<void> {
+    const logger = createContextLogger({ operation: 'scalar_index_refresh', store: 'lancedb' });
+    const rowsAtStart = this.scalarModifiedRows;
+    try {
+      await this.currentTable().createIndex('id', {
+        config: lancedb.Index.btree(),
+        replace: true,
+        waitTimeoutSeconds: 3600,
+      });
+      this.scalarModifiedRows = Math.max(0, this.scalarModifiedRows - rowsAtStart);
+      await this.updateIndexMetrics();
+      lanceDbScalarIndexRefreshTotal.inc({ status: 'success' });
+      logger.info({ rowsAtStart }, 'LanceDB id B-tree refresh completed');
+    } catch (error) {
+      lanceDbScalarIndexRefreshTotal.inc({ status: 'error' });
+      logger.error({ error, rowsAtStart }, 'LanceDB id B-tree refresh failed');
+    } finally {
+      this.scalarIndexRefreshPromise = undefined;
     }
   }
 
@@ -378,6 +427,7 @@ export class LanceDbVectorStore implements IVectorStore {
 
   async close(): Promise<void> {
     if (this.optimizePromise) await this.optimizePromise;
+    if (this.scalarIndexRefreshPromise) await this.scalarIndexRefreshPromise;
     this.table?.close();
     this.connection?.close();
     await this.tweets.close();

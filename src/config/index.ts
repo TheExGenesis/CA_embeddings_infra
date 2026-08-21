@@ -36,6 +36,7 @@ const envSchema = z.object({
   LANCEDB_NPROBES: z.string().default('64').transform(Number),
   LANCEDB_REFINE_FACTOR: z.string().default('2').transform(Number),
   LANCEDB_AUTO_OPTIMIZE: z.string().default('true').transform(val => val === 'true'),
+  LANCEDB_SCALAR_INDEX_REFRESH_AFTER_ROWS: z.string().default('0').transform(Number),
   LANCEDB_OPTIMIZE_AFTER_ROWS: z.string().default('100000').transform(Number),
   LANCEDB_OPTIMIZE_AFTER_MUTATIONS: z.string().default('1000').transform(Number),
 
@@ -132,6 +133,7 @@ export const appConfig: AppConfig = {
       nprobes: env.LANCEDB_NPROBES,
       refineFactor: env.LANCEDB_REFINE_FACTOR,
       autoOptimize: env.LANCEDB_AUTO_OPTIMIZE,
+      scalarIndexRefreshAfterRows: env.LANCEDB_SCALAR_INDEX_REFRESH_AFTER_ROWS,
       optimizeAfterRows: env.LANCEDB_OPTIMIZE_AFTER_ROWS,
       optimizeAfterMutations: env.LANCEDB_OPTIMIZE_AFTER_MUTATIONS,
     },

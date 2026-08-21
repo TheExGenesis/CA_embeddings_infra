@@ -133,6 +133,25 @@ export const lanceDbUnindexedRows = new Gauge({
   registers: [register],
 });
 
+export const lanceDbScalarIndexedRows = new Gauge({
+  name: 'lancedb_scalar_indexed_rows',
+  help: 'Number of LanceDB rows covered by the id B-tree',
+  registers: [register],
+});
+
+export const lanceDbScalarUnindexedRows = new Gauge({
+  name: 'lancedb_scalar_unindexed_rows',
+  help: 'Number of LanceDB rows not yet covered by the id B-tree',
+  registers: [register],
+});
+
+export const lanceDbScalarIndexRefreshTotal = new Counter({
+  name: 'lancedb_scalar_index_refresh_total',
+  help: 'LanceDB id B-tree refresh operations by status',
+  labelNames: ['status'],
+  registers: [register],
+});
+
 export const lanceDbOptimizeTotal = new Counter({
   name: 'lancedb_optimize_total',
   help: 'LanceDB background optimize operations by status',
