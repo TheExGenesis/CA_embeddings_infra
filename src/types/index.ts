@@ -125,6 +125,7 @@ export interface LanceDbConfig {
   table: string;
   nprobes: number;
   refineFactor: number;
+  autoOptimize: boolean;
   optimizeAfterRows: number;
   optimizeAfterMutations: number;
 }

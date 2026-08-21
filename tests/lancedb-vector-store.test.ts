@@ -52,6 +52,7 @@ function config(uri: string): DatabaseConfig {
       table: 'vectors',
       nprobes: 1,
       refineFactor: 2,
+      autoOptimize: true,
       optimizeAfterRows: 100_000,
       optimizeAfterMutations: 20,
     },

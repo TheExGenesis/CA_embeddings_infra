@@ -12,6 +12,8 @@ vector index and receives no vector writes.
 - Index: cosine `IVF_RQ`, one bit per dimension, 4,096 partitions
 - Scalar index: `BTree` on `id` for point reads, upserts, and deletes
 - Search: 64 IVF probes and refinement factor 2
+- Automatic optimization: disabled during historical bulk loading; run one
+  controlled `optimize()` after the backfill
 - Payloads and policy: hydrated from canonical tweet projections in ClickHouse
 - Filtered vector searches: bounded Lance candidate search, then canonical
   metadata filtering
@@ -28,6 +30,7 @@ LANCEDB_URI=/data/lancedb/db
 LANCEDB_TABLE=vectors
 LANCEDB_NPROBES=64
 LANCEDB_REFINE_FACTOR=2
+LANCEDB_AUTO_OPTIMIZE=false
 TWEET_CLICKHOUSE_URL=http://127.0.0.1:18123
 TWEET_CLICKHOUSE_DATABASE=community_archive
 LANCEDB_OPTIMIZE_AFTER_ROWS=100000

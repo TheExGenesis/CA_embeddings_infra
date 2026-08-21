@@ -223,6 +223,7 @@ GET /metrics             # Prometheus metrics
 | `LANCEDB_TABLE` | `vectors` | Lance table containing IDs and vectors |
 | `LANCEDB_NPROBES` | `64` | IVF partitions probed per search |
 | `LANCEDB_REFINE_FACTOR` | `2` | Full-vector exact reranking multiplier |
+| `LANCEDB_AUTO_OPTIMIZE` | `true` | Run automatic compaction/index maintenance after mutation thresholds |
 | `LANCEDB_OPTIMIZE_AFTER_ROWS` | `100000` | Modified-row threshold for background optimize |
 | `LANCEDB_OPTIMIZE_AFTER_MUTATIONS` | `1000` | Mutation-operation threshold for background optimize |
 | `TWEET_CLICKHOUSE_URL` | `http://localhost:18123` | Read-only canonical tweet ClickHouse endpoint |

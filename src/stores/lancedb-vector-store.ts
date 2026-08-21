@@ -135,6 +135,7 @@ export class LanceDbVectorStore implements IVectorStore {
   private readonly dimension: number;
   private readonly nprobes: number;
   private readonly refineFactor: number;
+  private readonly autoOptimize: boolean;
   private readonly filterCandidates: number;
   private readonly optimizeAfterRows: number;
   private readonly optimizeAfterMutations: number;
@@ -153,6 +154,7 @@ export class LanceDbVectorStore implements IVectorStore {
     this.dimension = config.dimension;
     this.nprobes = Math.max(1, Math.floor(config.lancedb.nprobes));
     this.refineFactor = Math.max(1, Math.floor(config.lancedb.refineFactor));
+    this.autoOptimize = config.lancedb.autoOptimize;
     this.filterCandidates = Math.max(1, Math.floor(config.tweetClickhouse.filterCandidates));
     this.optimizeAfterRows = Math.max(1, Math.floor(config.lancedb.optimizeAfterRows));
     this.optimizeAfterMutations = Math.max(1, Math.floor(config.lancedb.optimizeAfterMutations));
@@ -196,6 +198,7 @@ export class LanceDbVectorStore implements IVectorStore {
   }
 
   private recordMutation(rows: number): void {
+    if (!this.autoOptimize) return;
     this.modifiedRows += rows;
     this.mutationOperations += 1;
     if (
