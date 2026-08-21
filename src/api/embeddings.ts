@@ -6,13 +6,15 @@ import {
   SearchQuerySchema,
   UpdateMetadataSchema,
   RetrieveVectorSchema,
+  ExistingKeysSchema,
   validateVector,
   normalizeVector,
   type BulkInsertInput,
   type BulkDeleteInput,
   type SearchQueryInput,
   type UpdateMetadataInput,
-  type RetrieveVectorInput
+  type RetrieveVectorInput,
+  type ExistingKeysInput
 } from '../utils/validation.js';
 import { createContextLogger } from '../observability/logger.js';
 import { appConfig } from '../config/index.js';
@@ -33,6 +35,22 @@ interface EmbeddingRoutes {
 }
 
 const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { embeddingService }) => {
+
+  fastify.post<{
+    Body: ExistingKeysInput;
+  }>('/embeddings/exists', {
+    preHandler: apiKeyAuthMiddleware
+  }, async (request: FastifyRequest<{ Body: ExistingKeysInput }>, reply: FastifyReply) => {
+    const parsed = ExistingKeysSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ success: false, error: 'Invalid request body', details: parsed.error.errors });
+    }
+    if (!embeddingService.existingKeys) {
+      return reply.status(501).send({ success: false, error: 'Batch existence checks are not supported' });
+    }
+    const existing = await embeddingService.existingKeys(parsed.data.ids);
+    return reply.send({ success: true, existing, count: existing.length });
+  });
 
   fastify.post<{
     Body: BulkInsertInput;

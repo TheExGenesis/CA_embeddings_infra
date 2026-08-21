@@ -133,12 +133,6 @@ export const lanceDbUnindexedRows = new Gauge({
   registers: [register],
 });
 
-export const lanceDbClickHouseVectorGap = new Gauge({
-  name: 'lancedb_clickhouse_vector_count_gap',
-  help: 'Signed LanceDB vector count minus ClickHouse vector count',
-  registers: [register],
-});
-
 export const lanceDbOptimizeTotal = new Counter({
   name: 'lancedb_optimize_total',
   help: 'LanceDB background optimize operations by status',
@@ -146,15 +140,15 @@ export const lanceDbOptimizeTotal = new Counter({
   registers: [register],
 });
 
-export const lanceDbFilterFallbackTotal = new Counter({
-  name: 'lancedb_filter_fallback_total',
-  help: 'Filtered LanceDB searches served by the ClickHouse compatibility path',
+export const lanceDbFilteredSearchTotal = new Counter({
+  name: 'lancedb_filtered_search_total',
+  help: 'Filtered LanceDB searches evaluated against canonical tweet metadata',
   registers: [register],
 });
 
-export const lanceDbWriteThroughTotal = new Counter({
-  name: 'lancedb_write_through_total',
-  help: 'LanceDB mutation synchronization attempts after the ClickHouse rollback write',
+export const lanceDbMutationTotal = new Counter({
+  name: 'lancedb_mutation_total',
+  help: 'LanceDB mutation attempts by operation and status',
   labelNames: ['operation', 'status'],
   registers: [register],
 });

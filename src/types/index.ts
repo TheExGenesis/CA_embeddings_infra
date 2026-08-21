@@ -125,9 +125,18 @@ export interface LanceDbConfig {
   table: string;
   nprobes: number;
   refineFactor: number;
-  writeThroughClickHouse: boolean;
   optimizeAfterRows: number;
   optimizeAfterMutations: number;
+}
+
+export interface TweetClickHouseConfig {
+  url: string;
+  user: string;
+  password?: string;
+  database: string;
+  timeout?: number;
+  hydrationBatchSize: number;
+  filterCandidates: number;
 }
 
 export interface DatabaseConfig {
@@ -137,8 +146,10 @@ export interface DatabaseConfig {
   qdrant?: QdrantConfig;
   // ClickHouse-specific config
   clickhouse?: ClickHouseConfig;
-  // LanceDB vector search with ClickHouse payload hydration/write-through
+  // LanceDB is the vector authority. Canonical tweet ClickHouse is read-only
+  // and is used only to hydrate current, policy-safe tweet metadata.
   lancedb?: LanceDbConfig;
+  tweetClickhouse?: TweetClickHouseConfig;
 }
 
 export interface ServerConfig {

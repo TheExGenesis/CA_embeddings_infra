@@ -166,8 +166,9 @@ Content-Type: application/json
 }
 ```
 
-**Note**: LanceDB routes metadata-filtered searches through ClickHouse so the
-existing filter behavior is preserved.
+**Note**: LanceDB owns vector search. Results are hydrated and policy-filtered
+against the canonical tweet ClickHouse projection; filtered searches hydrate a
+bounded Lance candidate set before applying the existing filter behavior.
 
 **For detailed search API documentation with advanced filtering examples, see [docs/SEARCH_API.md](docs/SEARCH_API.md).**
 
@@ -222,9 +223,15 @@ GET /metrics             # Prometheus metrics
 | `LANCEDB_TABLE` | `vectors` | Lance table containing IDs and vectors |
 | `LANCEDB_NPROBES` | `64` | IVF partitions probed per search |
 | `LANCEDB_REFINE_FACTOR` | `2` | Full-vector exact reranking multiplier |
-| `LANCEDB_WRITE_THROUGH_CLICKHOUSE` | `true` | Keep ClickHouse current for rollback |
 | `LANCEDB_OPTIMIZE_AFTER_ROWS` | `100000` | Modified-row threshold for background optimize |
 | `LANCEDB_OPTIMIZE_AFTER_MUTATIONS` | `1000` | Mutation-operation threshold for background optimize |
+| `TWEET_CLICKHOUSE_URL` | `http://localhost:18123` | Read-only canonical tweet ClickHouse endpoint |
+| `TWEET_CLICKHOUSE_USER` | `default` | Canonical tweet ClickHouse user |
+| `TWEET_CLICKHOUSE_PASSWORD` | - | Canonical tweet ClickHouse password |
+| `TWEET_CLICKHOUSE_DATABASE` | `community_archive` | Canonical tweet database |
+| `TWEET_CLICKHOUSE_TIMEOUT` | `30000` | Canonical hydration timeout (ms) |
+| `TWEET_CLICKHOUSE_HYDRATION_BATCH_SIZE` | `100` | IDs per canonical hydration query |
+| `LANCEDB_FILTER_CANDIDATES` | `256` | Lance candidates hydrated for filtered searches |
 | **Observability** | | |
 | `ENABLE_METRICS` | `true` | Enable Prometheus metrics |
 | `ENABLE_TRACING` | `true` | Enable OpenTelemetry tracing |

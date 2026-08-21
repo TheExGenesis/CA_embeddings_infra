@@ -47,23 +47,21 @@ function config(uri: string): DatabaseConfig {
   return {
     type: 'lancedb',
     dimension: 8,
-    clickhouse: {
-      url: 'http://clickhouse:8123',
-      user: 'search',
-      password: 'secret',
-      database: 'vector_bench',
-      vectorTable: 'vectors',
-      payloadTable: 'payloads',
-      searchCandidates: 256,
-    },
     lancedb: {
       uri,
       table: 'vectors',
       nprobes: 1,
       refineFactor: 2,
-      writeThroughClickHouse: true,
       optimizeAfterRows: 100_000,
       optimizeAfterMutations: 20,
+    },
+    tweetClickhouse: {
+      url: 'http://canonical-clickhouse:8123',
+      user: 'search',
+      password: 'secret',
+      database: 'community_archive',
+      hydrationBatchSize: 100,
+      filterCandidates: 256,
     },
   };
 }
@@ -72,21 +70,21 @@ function installClickHouseMock(requests: string[]): void {
   globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
     const sql = String(init?.body ?? '');
     requests.push(sql);
-    if (sql.includes('FROM system.columns')) {
-      return new Response('{"name":"embedding","type":"Array(BFloat16)"}\n');
+    if (sql.includes('FROM system.databases')) {
+      return new Response('{"ok":1}\n');
     }
-    if (sql.includes('candidates AS')) {
-      return new Response('{"id":"1","score":0.9}\n');
+    if (sql.includes('FROM community_archive.tweet_content_versions')) {
+      return new Response('{"id":"1","account_id":"10","created_at":"2026-01-01 00:00:00.000","full_text":"hello","reply_to_tweet_id":"","reply_to_user_id":"","reply_to_username":null,"is_tombstone":0}\n');
     }
-    if (sql.includes('FROM vector_bench.payloads FINAL')) {
-      return new Response('{"id":"1","key":"1","metadata":"{\\"text\\":\\"hello\\"}"}\n');
+    if (sql.includes('FROM community_archive.account_identity_states')) {
+      return new Response('{"account_id":"10","username":"alice","account_display_name":"Alice"}\n');
     }
     return new Response('', { status: 200 });
   }) as unknown as typeof fetch;
 }
 
 describe('LanceDbVectorStore', () => {
-  it('serves unfiltered cosine search from LanceDB and hydrates ClickHouse payloads', async () => {
+  it('serves cosine search from LanceDB and hydrates canonical tweet payloads', async () => {
     const uri = await createIndexedDatabase();
     const requests: string[] = [];
     installClickHouseMock(requests);
@@ -101,13 +99,13 @@ describe('LanceDbVectorStore', () => {
 
     expect(results[0]?.key).toBe('1');
     expect(results[0]?.distance).toBeGreaterThan(0.99);
-    expect(results[0]?.metadata).toEqual({ text: 'hello' });
+    expect(results[0]?.metadata).toMatchObject({ text: 'hello', username: 'alice' });
     expect(results[0]?.vector).toHaveLength(8);
     expect(requests.some(sql => sql.includes('candidates AS'))).toBe(false);
     await store.close();
   });
 
-  it('falls back to ClickHouse for filters and writes mutations to both stores', async () => {
+  it('filters hydrated candidates and writes mutations only to LanceDB', async () => {
     const uri = await createIndexedDatabase();
     const requests: string[] = [];
     installClickHouseMock(requests);
@@ -119,8 +117,8 @@ describe('LanceDbVectorStore', () => {
       k: 1,
       filter: { provider: 'deepinfra' },
     });
-    expect(filtered[0]).toEqual({ key: '1', distance: 0.9, metadata: { text: 'hello' } });
-    expect(requests.some(sql => sql.includes('candidates AS'))).toBe(true);
+    expect(filtered[0]?.key).toBe('1');
+    expect(filtered[0]?.metadata).toMatchObject({ provider: 'deepinfra', text: 'hello' });
 
     const unsignedKey = '18446744073709551001';
     await store.insert([{
@@ -129,11 +127,11 @@ describe('LanceDbVectorStore', () => {
       metadata: { text: 'new' },
     }]);
     expect(await store.exists(unsignedKey)).toBe(true);
-    expect(requests.some(sql => sql.includes('INSERT INTO vector_bench.vectors'))).toBe(true);
+    expect(await store.existingKeys([unsignedKey, '1'])).toContain(unsignedKey);
+    expect(requests.some(sql => sql.includes('vector_bench'))).toBe(false);
 
     await store.delete([unsignedKey]);
     expect(await store.exists(unsignedKey)).toBe(false);
-    expect(requests.some(sql => sql.includes('ALTER TABLE vector_bench.vectors DELETE'))).toBe(true);
     await store.close();
   });
 });

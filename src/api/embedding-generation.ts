@@ -141,11 +141,11 @@ const embeddingGenerationRoutes: FastifyPluginAsync<EmbeddingGenerationRoutes> =
 
       const response: GenerateEmbeddingsResponse = {
         success: true,
-        results: results.map(result => ({
+        results: validatedData.return_vectors ? results.map(result => ({
           key: result.key,
           vector: result.vector,
           metadata: result.metadata,
-        })),
+        })) : undefined,
         generated: results.length,
       };
 

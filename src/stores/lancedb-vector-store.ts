@@ -4,6 +4,10 @@ import type { IVectorStore } from '../interfaces/vector-store.interface.js';
 import type {
   DatabaseConfig,
   EmbeddingVector,
+  FieldCondition,
+  Filter,
+  FilterItem,
+  SearchFilter,
   SearchQuery,
   SearchResult,
 } from '../types/index.js';
@@ -11,17 +15,16 @@ import { createContextLogger } from '../observability/logger.js';
 import {
   collectionIndexedPercentage,
   embeddingOperationDuration,
-  lanceDbClickHouseVectorGap,
-  lanceDbFilterFallbackTotal,
+  lanceDbFilteredSearchTotal,
   lanceDbIndexedRows,
   lanceDbOptimizeTotal,
   lanceDbUnindexedRows,
-  lanceDbWriteThroughTotal,
+  lanceDbMutationTotal,
   vectorCount,
   vectorStoreItemsProcessed,
   vectorStoreOperationsTotal,
 } from '../observability/metrics.js';
-import { ClickHouseVectorStore } from './clickhouse-vector-store.js';
+import { TweetClickHouseStore } from './tweet-clickhouse-store.js';
 
 type RetrievedPoint = {
   id: string;
@@ -54,16 +57,88 @@ function vectorValues(value: unknown): number[] {
   return [];
 }
 
+function isFieldCondition(value: FilterItem): value is FieldCondition {
+  return typeof value === 'object' && value !== null && 'key' in value;
+}
+
+function metadataValue(metadata: Record<string, unknown>, key: string): unknown {
+  return key.split('.').reduce<unknown>((value, part) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    return (value as Record<string, unknown>)[part];
+  }, metadata);
+}
+
+function comparable(value: unknown): number | string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'number') return value;
+  const numeric = Number(value);
+  if (String(value).trim() !== '' && Number.isFinite(numeric)) return numeric;
+  const timestamp = Date.parse(String(value));
+  return Number.isNaN(timestamp) ? String(value) : timestamp;
+}
+
+function matchesField(metadata: Record<string, unknown>, condition: FieldCondition): boolean {
+  const value = metadataValue(metadata, condition.key);
+  if (condition.match) {
+    if (condition.match.text !== undefined) {
+      return String(value ?? '').toLocaleLowerCase().includes(condition.match.text.toLocaleLowerCase());
+    }
+    return String(value) === String(condition.match.value);
+  }
+  if (!condition.range) return false;
+  const left = comparable(value);
+  if (left === undefined) return false;
+  const checks: boolean[] = [];
+  for (const [operator, raw] of Object.entries(condition.range)) {
+    const right = comparable(raw);
+    if (right === undefined || typeof left !== typeof right) return false;
+    if (operator === 'gt') checks.push(left > right);
+    if (operator === 'gte') checks.push(left >= right);
+    if (operator === 'lt') checks.push(left < right);
+    if (operator === 'lte') checks.push(left <= right);
+  }
+  return checks.length > 0 && checks.every(Boolean);
+}
+
+function matchesClause(metadata: Record<string, unknown>, filter: Filter): boolean {
+  const matches = (item: FilterItem) => isFieldCondition(item)
+    ? matchesField(metadata, item)
+    : matchesClause(metadata, item);
+  if (filter.must?.some(item => !matches(item))) return false;
+  if (filter.should?.length && !filter.should.some(matches)) return false;
+  if (filter.must_not?.some(matches)) return false;
+  return true;
+}
+
+function matchesFilter(metadata: Record<string, unknown>, filter: SearchFilter): boolean {
+  const keys = Object.keys(filter);
+  if (keys.some(key => key === 'must' || key === 'should' || key === 'must_not')) {
+    return matchesClause(metadata, filter as Filter);
+  }
+  return Object.entries(filter).every(([key, raw]) => {
+    const value = metadataValue(metadata, key);
+    if (typeof raw === 'string') {
+      const range = raw.match(/^(>=|<=|>|<)\s*(.+)$/);
+      if (range) {
+        const condition: FieldCondition = { key, range: { [range[1] === '>' ? 'gt' : range[1] === '>=' ? 'gte' : range[1] === '<' ? 'lt' : 'lte']: range[2] } };
+        return matchesField(metadata, condition);
+      }
+      if (key === 'text' || key === 'original_text') return String(value ?? '').toLocaleLowerCase().includes(raw.toLocaleLowerCase());
+    }
+    return String(value) === String(raw);
+  });
+}
+
 export class LanceDbVectorStore implements IVectorStore {
   private readonly uri: string;
   private readonly tableName: string;
   private readonly dimension: number;
   private readonly nprobes: number;
   private readonly refineFactor: number;
-  private readonly writeThroughClickHouse: boolean;
+  private readonly filterCandidates: number;
   private readonly optimizeAfterRows: number;
   private readonly optimizeAfterMutations: number;
-  private readonly clickhouse: ClickHouseVectorStore;
+  private readonly tweets: TweetClickHouseStore;
   private connection?: Connection;
   private table?: Table;
   private modifiedRows = 0;
@@ -72,16 +147,16 @@ export class LanceDbVectorStore implements IVectorStore {
 
   constructor(config: DatabaseConfig) {
     if (!config.lancedb) throw new Error('LanceDB configuration is required');
-    if (!config.clickhouse) throw new Error('ClickHouse configuration is required for LanceDB payloads and rollback writes');
+    if (!config.tweetClickhouse) throw new Error('Canonical tweet ClickHouse configuration is required for LanceDB payloads');
     this.uri = config.lancedb.uri;
     this.tableName = config.lancedb.table;
     this.dimension = config.dimension;
     this.nprobes = Math.max(1, Math.floor(config.lancedb.nprobes));
     this.refineFactor = Math.max(1, Math.floor(config.lancedb.refineFactor));
-    this.writeThroughClickHouse = config.lancedb.writeThroughClickHouse;
+    this.filterCandidates = Math.max(1, Math.floor(config.tweetClickhouse.filterCandidates));
     this.optimizeAfterRows = Math.max(1, Math.floor(config.lancedb.optimizeAfterRows));
     this.optimizeAfterMutations = Math.max(1, Math.floor(config.lancedb.optimizeAfterMutations));
-    this.clickhouse = new ClickHouseVectorStore(config);
+    this.tweets = new TweetClickHouseStore(config);
   }
 
   private currentTable(): Table {
@@ -90,7 +165,7 @@ export class LanceDbVectorStore implements IVectorStore {
   }
 
   async initialize(): Promise<void> {
-    await this.clickhouse.initialize();
+    await this.tweets.initialize();
     this.connection = await lancedb.connect(this.uri);
     this.table = await this.connection.openTable(this.tableName);
     const schema = await this.table.schema();
@@ -158,7 +233,6 @@ export class LanceDbVectorStore implements IVectorStore {
         throw new Error(`Vector dimension mismatch. Expected ${this.dimension}, got ${item.vector.length}`);
       }
     }
-    if (this.writeThroughClickHouse) await this.clickhouse.insert(embeddings);
     const rows = embeddings.map(item => ({
       id: BigInt(item.key),
       vector: Array.from(item.vector, Number),
@@ -169,48 +243,48 @@ export class LanceDbVectorStore implements IVectorStore {
         .whenMatchedUpdateAll()
         .whenNotMatchedInsertAll()
         .execute(rows);
-      lanceDbWriteThroughTotal.inc({ operation: 'insert', status: 'success' });
+      lanceDbMutationTotal.inc({ operation: 'insert', status: 'success' });
     } catch (error) {
-      lanceDbWriteThroughTotal.inc({ operation: 'insert', status: 'error' });
+      lanceDbMutationTotal.inc({ operation: 'insert', status: 'error' });
       throw error;
     }
     this.recordMutation(rows.length);
-    if (!this.writeThroughClickHouse) {
-      vectorStoreOperationsTotal.inc({ operation: 'insert', status: 'success' });
-      vectorStoreItemsProcessed.inc({ operation: 'insert' }, rows.length);
-    }
+    vectorStoreOperationsTotal.inc({ operation: 'insert', status: 'success' });
+    vectorStoreItemsProcessed.inc({ operation: 'insert' }, rows.length);
   }
 
   async search(query: SearchQuery): Promise<SearchResult[]> {
     if (query.vector.length !== this.dimension) {
       throw new Error(`Vector dimension mismatch. Expected ${this.dimension}, got ${query.vector.length}`);
     }
-    if (query.filter) {
-      lanceDbFilterFallbackTotal.inc();
-      return this.clickhouse.search(query);
-    }
     const timer = embeddingOperationDuration.startTimer({ operation: 'search' });
     const logger = createContextLogger({ operation: 'search', store: 'lancedb', k: query.k });
     try {
       const columns = ['id', '_distance', ...(query.with_vector ? ['vector'] : [])];
+      const requested = Math.max(1, Math.floor(query.k));
+      const candidateLimit = query.filter
+        ? Math.max(requested, this.filterCandidates)
+        : Math.max(requested * 2, requested + 10);
       const rows = await this.currentTable()
         .vectorSearch(query.vector)
         .distanceType('cosine')
         .nprobes(this.nprobes)
         .refineFactor(this.refineFactor)
         .select(columns)
-        .limit(Math.max(1, Math.floor(query.k)))
+        .limit(candidateLimit)
         .toArray();
       const ids = rows.map(row => String(row.id));
-      const payloads = (query.with_payload ?? true)
-        ? await this.clickhouse.retrievePayloads(ids)
-        : [];
+      // Canonical hydration is also the policy gate: absent, opted-out, and
+      // tombstoned tweets never escape even when payload output is disabled.
+      const payloads = await this.tweets.retrievePayloads(ids);
       const payloadById = new Map(payloads.map(payload => [payload.id, payload]));
       const results = rows
         .map(row => {
           const id = String(row.id);
           const score = 1 - Number(row._distance);
           const payload = payloadById.get(id);
+          if (!payload?.metadata) return undefined;
+          if (query.filter && !matchesFilter(payload.metadata, query.filter)) return undefined;
           return {
             key: payload?.key ?? id,
             distance: score,
@@ -218,7 +292,10 @@ export class LanceDbVectorStore implements IVectorStore {
             ...(query.with_vector ? { vector: vectorValues(row.vector) } : {}),
           } satisfies SearchResult;
         })
-        .filter(result => query.threshold === undefined || result.distance >= query.threshold);
+        .filter((result): result is SearchResult => result !== undefined)
+        .filter(result => query.threshold === undefined || result.distance >= query.threshold)
+        .slice(0, requested);
+      if (query.filter) lanceDbFilteredSearchTotal.inc();
       const elapsed = timer();
       logger.info({ resultCount: results.length, queryTime: elapsed }, 'Vector search completed');
       vectorStoreOperationsTotal.inc({ operation: 'search', status: 'success' });
@@ -234,12 +311,11 @@ export class LanceDbVectorStore implements IVectorStore {
   async delete(keys: string[]): Promise<void> {
     if (!keys.length) return;
     const ids = sqlIds(keys);
-    if (this.writeThroughClickHouse) await this.clickhouse.delete(keys);
     try {
       await this.currentTable().delete(`id IN (${ids})`);
-      lanceDbWriteThroughTotal.inc({ operation: 'delete', status: 'success' });
+      lanceDbMutationTotal.inc({ operation: 'delete', status: 'success' });
     } catch (error) {
-      lanceDbWriteThroughTotal.inc({ operation: 'delete', status: 'error' });
+      lanceDbMutationTotal.inc({ operation: 'delete', status: 'error' });
       throw error;
     }
     this.recordMutation(keys.length);
@@ -249,8 +325,15 @@ export class LanceDbVectorStore implements IVectorStore {
     return (await this.currentTable().countRows(`id = ${sqlUInt64(key)}`)) > 0;
   }
 
-  async updateMetadata(updates: Array<{ key: string; metadata: Record<string, unknown> }>): Promise<{ updated: number; failed: number }> {
-    return this.clickhouse.updateMetadata(updates);
+  async existingKeys(keys: string[]): Promise<string[]> {
+    if (!keys.length) return [];
+    const ids = keys.map(parseNumericKey);
+    const rows = await this.currentTable()
+      .query()
+      .where(`id IN (${sqlIds(ids)})`)
+      .select(['id'])
+      .toArray();
+    return rows.map(row => String(row.id));
   }
 
   async retrievePoints(ids: string[]): Promise<RetrievedPoint[]> {
@@ -261,13 +344,14 @@ export class LanceDbVectorStore implements IVectorStore {
       .where(`id IN (${sqlIds(numericIds)})`)
       .select(['id', 'vector'])
       .toArray();
-    const payloads = await this.clickhouse.retrievePayloads(numericIds);
+    const payloads = await this.tweets.retrievePayloads(numericIds);
     const payloadById = new Map(payloads.map(payload => [payload.id, payload]));
     const rowById = new Map(rows.map(row => [String(row.id), row]));
     return numericIds.flatMap(id => {
       const row = rowById.get(id);
       if (!row) return [];
       const payload = payloadById.get(id);
+      if (!payload?.metadata) return [];
       return [{
         id,
         vector: vectorValues(row.vector),
@@ -280,12 +364,8 @@ export class LanceDbVectorStore implements IVectorStore {
   }
 
   async getStats(): Promise<{ vectorCount: number; dbSize: string }> {
-    const [stats, clickhouseStats] = await Promise.all([
-      this.currentTable().stats(),
-      this.clickhouse.getStats(),
-    ]);
+    const stats = await this.currentTable().stats();
     vectorCount.set(stats.numRows);
-    lanceDbClickHouseVectorGap.set(stats.numRows - clickhouseStats.vectorCount);
     await this.updateIndexMetrics();
     return {
       vectorCount: stats.numRows,
@@ -297,7 +377,7 @@ export class LanceDbVectorStore implements IVectorStore {
     if (this.optimizePromise) await this.optimizePromise;
     this.table?.close();
     this.connection?.close();
-    await this.clickhouse.close();
+    await this.tweets.close();
     this.table = undefined;
     this.connection = undefined;
   }

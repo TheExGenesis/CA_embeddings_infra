@@ -30,15 +30,22 @@ const envSchema = z.object({
   CLICKHOUSE_TIMEOUT: z.string().default('30000').transform(Number),
   CLICKHOUSE_SEARCH_CANDIDATES: z.string().default('256').transform(Number),
 
-  // LanceDB-specific configuration. ClickHouse remains the payload and
-  // write-through rollback store when LanceDB serves vector searches.
+  // LanceDB-specific configuration.
   LANCEDB_URI: z.string().default('./data/lancedb'),
   LANCEDB_TABLE: z.string().default('vectors'),
   LANCEDB_NPROBES: z.string().default('64').transform(Number),
   LANCEDB_REFINE_FACTOR: z.string().default('2').transform(Number),
-  LANCEDB_WRITE_THROUGH_CLICKHOUSE: z.string().default('true').transform(val => val === 'true'),
   LANCEDB_OPTIMIZE_AFTER_ROWS: z.string().default('100000').transform(Number),
   LANCEDB_OPTIMIZE_AFTER_MUTATIONS: z.string().default('1000').transform(Number),
+
+  // Canonical tweet projection used for read-only payload hydration.
+  TWEET_CLICKHOUSE_URL: z.string().default('http://localhost:18123'),
+  TWEET_CLICKHOUSE_USER: z.string().default('default'),
+  TWEET_CLICKHOUSE_PASSWORD: z.string().optional(),
+  TWEET_CLICKHOUSE_DATABASE: z.string().default('community_archive'),
+  TWEET_CLICKHOUSE_TIMEOUT: z.string().default('30000').transform(Number),
+  TWEET_CLICKHOUSE_HYDRATION_BATCH_SIZE: z.string().default('100').transform(Number),
+  LANCEDB_FILTER_CANDIDATES: z.string().default('256').transform(Number),
 
   ENABLE_METRICS: z.string().default('true').transform(val => val === 'true'),
   METRICS_PORT: z.string().default('9090').transform(Number),
@@ -123,9 +130,17 @@ export const appConfig: AppConfig = {
       table: env.LANCEDB_TABLE,
       nprobes: env.LANCEDB_NPROBES,
       refineFactor: env.LANCEDB_REFINE_FACTOR,
-      writeThroughClickHouse: env.LANCEDB_WRITE_THROUGH_CLICKHOUSE,
       optimizeAfterRows: env.LANCEDB_OPTIMIZE_AFTER_ROWS,
       optimizeAfterMutations: env.LANCEDB_OPTIMIZE_AFTER_MUTATIONS,
+    },
+    tweetClickhouse: {
+      url: env.TWEET_CLICKHOUSE_URL,
+      user: env.TWEET_CLICKHOUSE_USER,
+      password: env.TWEET_CLICKHOUSE_PASSWORD,
+      database: env.TWEET_CLICKHOUSE_DATABASE,
+      timeout: env.TWEET_CLICKHOUSE_TIMEOUT,
+      hydrationBatchSize: env.TWEET_CLICKHOUSE_HYDRATION_BATCH_SIZE,
+      filterCandidates: env.LANCEDB_FILTER_CANDIDATES,
     },
   },
   observability: {
