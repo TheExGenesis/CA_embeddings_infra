@@ -54,6 +54,14 @@ export async function createServer() {
   await fastify.register(rateLimit, {
     max: appConfig.rateLimit.max,
     timeWindow: appConfig.rateLimit.windowMs,
+    allowList: request => {
+      const authorization = request.headers.authorization;
+      const headerKey = request.headers['x-api-key'];
+      const providedKey = authorization?.startsWith('Bearer ')
+        ? authorization.slice(7)
+        : typeof headerKey === 'string' ? headerKey : undefined;
+      return providedKey !== undefined && appConfig.security.apiKeys.includes(providedKey);
+    },
     errorResponseBuilder: () => ({
       error: 'Rate limit exceeded',
       message: `Too many requests, please try again later.`,
