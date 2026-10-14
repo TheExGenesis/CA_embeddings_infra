@@ -79,6 +79,9 @@ function installClickHouseMock(requests: string[]): void {
     if (sql.includes('FROM system.databases')) {
       return new Response('{"ok":1}\n');
     }
+    if (sql.includes('SELECT DISTINCT toString(account_id)')) {
+      return new Response('{"account_id":"10"}\n');
+    }
     if (sql.includes('FROM community_archive.tweet_content_versions')) {
       return new Response('{"id":"1","account_id":"10","created_at":"2026-01-01 00:00:00.000","full_text":"hello","reply_to_tweet_id":"","reply_to_user_id":"","reply_to_username":null,"is_tombstone":0}\n');
     }
@@ -108,6 +111,7 @@ describe('LanceDbVectorStore', () => {
     expect(results[0]?.metadata).toMatchObject({ text: 'hello', username: 'alice' });
     expect(results[0]?.vector).toHaveLength(8);
     expect(requests.some(sql => sql.includes('candidates AS'))).toBe(false);
+    expect(requests.some(sql => sql.includes('AND t.account_id IN (10)'))).toBe(true);
     await store.close();
   });
 
@@ -148,6 +152,7 @@ describe('LanceDbVectorStore', () => {
       const sql = String(init?.body ?? '');
       requests.push(sql);
       if (sql.includes('FROM system.databases')) return new Response('{"ok":1}\n');
+      if (sql.includes('SELECT DISTINCT toString(account_id)')) return new Response('{"account_id":"10"}\n');
       if (sql.includes('community_membership_by_account_current\n')) {
         return new Response('{"id":"300"}\n{"id":"301"}\n');
       }
