@@ -341,7 +341,10 @@ export class LanceDbVectorStore implements IVectorStore {
       const author = query.filter ? authorScope(query.filter) : undefined;
       // An archive-wide shortlist rarely holds k tweets by one author, so
       // author-scoped searches run over that author's tweets only.
+      const stages = { authorMs: 0, lanceMs: 0, hydrateMs: 0, passes: 0 };
+      let started = performance.now();
       const authorIds = author ? await this.tweets.authorTweetIds(author) : undefined;
+      stages.authorMs = Math.round(performance.now() - started);
       if (authorIds && authorIds.length === 0) {
         timer();
         return [];
@@ -388,20 +391,28 @@ export class LanceDbVectorStore implements IVectorStore {
         : query.filter
           ? Math.max(requested, this.filterCandidates)
           : Math.max(requested * 2, requested + 10);
-      let rows = await candidates(candidateLimit);
-      let results = await resultsFrom(rows);
+      const pass = async (limit: number) => {
+        stages.passes += 1;
+        started = performance.now();
+        const found = await candidates(limit);
+        stages.lanceMs += Math.round(performance.now() - started);
+        started = performance.now();
+        const kept = await resultsFrom(found);
+        stages.hydrateMs += Math.round(performance.now() - started);
+        return [found, kept] as const;
+      };
+      let [rows, results] = await pass(candidateLimit);
       // The policy gate can drop many candidates (non-members' tweets are
       // indexed too); widen once rather than return fewer than k.
       const belowThreshold = query.threshold !== undefined && rows.length > 0
         && 1 - Number(rows[rows.length - 1]!._distance) < query.threshold;
       if (results.length < requested && rows.length >= candidateLimit && !belowThreshold) {
         candidateLimit *= 4;
-        rows = await candidates(candidateLimit);
-        results = await resultsFrom(rows);
+        [rows, results] = await pass(candidateLimit);
       }
       if (query.filter) lanceDbFilteredSearchTotal.inc();
       const elapsed = timer();
-      logger.info({ resultCount: results.length, queryTime: elapsed }, 'Vector search completed');
+      logger.info({ resultCount: results.length, queryTime: elapsed, ...stages, authorTweets: authorIds?.length }, 'Vector search completed');
       vectorStoreOperationsTotal.inc({ operation: 'search', status: 'success' });
       vectorStoreItemsProcessed.inc({ operation: 'search' }, results.length);
       return results;
