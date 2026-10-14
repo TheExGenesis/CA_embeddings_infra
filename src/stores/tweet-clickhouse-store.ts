@@ -21,6 +21,12 @@ function identifier(value: string): string {
   return value;
 }
 
+function stringLiteral(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+export type AuthorScope = { key: 'username' | 'account_id'; value: string };
+
 function nullableString(value: unknown): string | undefined {
   if (value === null || value === undefined || value === '') return undefined;
   return String(value);
@@ -132,6 +138,23 @@ export class TweetClickHouseStore {
     }
     const results = await Promise.all(batches.map(batch => this.retrieveBatch(batch)));
     return results.flat();
+  }
+
+  /** Tweet IDs of one current, non-opted-out member, or [] when the author is not one. */
+  async authorTweetIds(author: AuthorScope): Promise<string[]> {
+    const member = author.key === 'account_id'
+      ? `account_id = ${numericKey(author.value)}`
+      : `username_lower = lower(${stringLiteral(author.value)})`;
+    const rows = await this.rows(`
+      SELECT DISTINCT toString(tweet_id) AS id
+      FROM ${this.database}.tweet_content_versions
+      WHERE account_id IN (
+        SELECT account_id
+        FROM ${this.database}.community_membership_by_account_current
+        WHERE ${member} AND is_member = 1 AND explicit_optout = 0
+      )
+    `);
+    return rows.map(row => String(row.id));
   }
 
   async close(): Promise<void> {}

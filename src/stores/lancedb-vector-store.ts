@@ -27,7 +27,7 @@ import {
   vectorStoreItemsProcessed,
   vectorStoreOperationsTotal,
 } from '../observability/metrics.js';
-import { TweetClickHouseStore } from './tweet-clickhouse-store.js';
+import { TweetClickHouseStore, type AuthorScope } from './tweet-clickhouse-store.js';
 
 type RetrievedPoint = {
   id: string;
@@ -36,6 +36,7 @@ type RetrievedPoint = {
 };
 
 const NUMERIC_KEY = /^\d+$/;
+const EXACT_AUTHOR_SEARCH_MAX_TWEETS = 20_000;
 
 function parseNumericKey(key: string): string {
   if (!NUMERIC_KEY.test(key)) {
@@ -132,6 +133,20 @@ function matchesFilter(metadata: Record<string, unknown>, filter: SearchFilter):
   });
 }
 
+function authorScope(filter: SearchFilter): AuthorScope | undefined {
+  const isAuthorKey = (key: string): key is AuthorScope['key'] => key === 'username' || key === 'account_id';
+  const keys = Object.keys(filter);
+  if (keys.some(key => key === 'must' || key === 'should' || key === 'must_not')) {
+    const condition = (filter as Filter).must?.find(
+      (item): item is FieldCondition => isFieldCondition(item) && isAuthorKey(item.key) && item.match?.value !== undefined,
+    );
+    return condition ? { key: condition.key as AuthorScope['key'], value: String(condition.match!.value) } : undefined;
+  }
+  const key = keys.find(isAuthorKey);
+  const value = key ? (filter as Record<string, unknown>)[key] : undefined;
+  return key && (typeof value === 'string' || typeof value === 'number') ? { key, value: String(value) } : undefined;
+}
+
 export class LanceDbVectorStore implements IVectorStore {
   private readonly uri: string;
   private readonly tableName: string;
@@ -187,6 +202,7 @@ export class LanceDbVectorStore implements IVectorStore {
     const vectorIndex = indices.find(index => index.columns.includes('vector'));
     if (!vectorIndex) throw new Error(`LanceDB table ${this.tableName} has no vector index`);
     await this.updateIndexMetrics();
+    this.maybeOptimize();
   }
 
   private async updateIndexMetrics(): Promise<void> {
@@ -198,6 +214,9 @@ export class LanceDbVectorStore implements IVectorStore {
       if (stats) {
         lanceDbIndexedRows.set(stats.numIndexedRows);
         lanceDbUnindexedRows.set(stats.numUnindexedRows);
+        // Unindexed rows are flat-scanned on every search, so the optimize
+        // backlog is the index's view, not a counter that resets on restart.
+        this.modifiedRows = Math.max(this.modifiedRows, stats.numUnindexedRows);
         const total = stats.numIndexedRows + stats.numUnindexedRows;
         collectionIndexedPercentage.set(
           { collection: this.tableName },
@@ -229,7 +248,12 @@ export class LanceDbVectorStore implements IVectorStore {
     if (!this.autoOptimize) return;
     this.modifiedRows += rows;
     this.mutationOperations += 1;
+    this.maybeOptimize();
+  }
+
+  private maybeOptimize(): void {
     if (
+      this.autoOptimize &&
       !this.optimizePromise &&
       (this.modifiedRows >= this.optimizeAfterRows || this.mutationOperations >= this.optimizeAfterMutations)
     ) {
@@ -314,14 +338,30 @@ export class LanceDbVectorStore implements IVectorStore {
     try {
       const columns = ['id', '_distance', ...(query.with_vector ? ['vector'] : [])];
       const requested = Math.max(1, Math.floor(query.k));
-      const candidateLimit = query.filter
-        ? Math.max(requested, this.filterCandidates)
-        : Math.max(requested * 2, requested + 10);
-      const rows = await this.currentTable()
+      const author = query.filter ? authorScope(query.filter) : undefined;
+      // An archive-wide shortlist rarely holds k tweets by one author, so
+      // author-scoped searches run over that author's tweets only.
+      const authorIds = author ? await this.tweets.authorTweetIds(author) : undefined;
+      if (authorIds && authorIds.length === 0) {
+        timer();
+        return [];
+      }
+      const candidateLimit = authorIds
+        ? requested * 2
+        : query.filter
+          ? Math.max(requested, this.filterCandidates)
+          : Math.max(requested * 2, requested + 10);
+      let search = this.currentTable()
         .vectorSearch(query.vector)
         .distanceType('cosine')
         .nprobes(this.nprobes)
-        .refineFactor(this.refineFactor)
+        .refineFactor(this.refineFactor);
+      if (authorIds) {
+        search = search.where(`id IN (${authorIds.map(parseNumericKey).join(',')})`);
+        // Exact distances are cheaper than an index walk for small authors.
+        if (authorIds.length <= EXACT_AUTHOR_SEARCH_MAX_TWEETS) search = search.bypassVectorIndex();
+      }
+      const rows = await search
         .select(columns)
         .limit(candidateLimit)
         .toArray();

@@ -141,6 +141,63 @@ describe('LanceDbVectorStore', () => {
     await store.close();
   });
 
+  it('searches only the filtered author tweets', async () => {
+    const uri = await createIndexedDatabase();
+    const requests: string[] = [];
+    globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
+      const sql = String(init?.body ?? '');
+      requests.push(sql);
+      if (sql.includes('FROM system.databases')) return new Response('{"ok":1}\n');
+      if (sql.includes('community_membership_by_account_current\n')) {
+        return new Response('{"id":"300"}\n{"id":"301"}\n');
+      }
+      if (sql.includes('FROM community_archive.tweet_content_versions')) {
+        const ids = sql.match(/tweet_id IN \(([^)]*)\)/)?.[1]?.split(',') ?? [];
+        return new Response(ids.map(id => JSON.stringify({ id, account_id: '10', created_at: '2026-01-01 00:00:00.000', full_text: `tweet ${id}`, is_tombstone: 0 })).join('\n'));
+      }
+      if (sql.includes('FROM community_archive.account_identity_states')) {
+        return new Response('{"account_id":"10","username":"alice","account_display_name":"Alice"}\n');
+      }
+      return new Response('');
+    }) as unknown as typeof fetch;
+    const store = new LanceDbVectorStore(config(uri));
+    await store.initialize();
+
+    const results = await store.search({
+      vector: new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]),
+      k: 5,
+      threshold: 0,
+      filter: { must: [{ key: 'username', match: { value: 'alice' } }] },
+    });
+
+    expect(results.map(result => result.key).sort()).toEqual(['300', '301']);
+    expect(requests.some(sql => sql.includes("username_lower = lower('alice')"))).toBe(true);
+    await store.close();
+  });
+
+  it('indexes an unindexed tail left before a restart', async () => {
+    const uri = await createIndexedDatabase();
+    installClickHouseMock([]);
+    const before = await lancedb.connect(uri);
+    const beforeTable = await before.openTable('vectors');
+    await beforeTable.add([{ id: 513n, vector: [0, 0, 1, 0, 0, 0, 0, 0] }]);
+    expect((await beforeTable.indexStats('vector_idx'))?.numUnindexedRows).toBe(1);
+    beforeTable.close();
+    before.close();
+
+    const storeConfig = config(uri);
+    storeConfig.lancedb!.optimizeAfterRows = 1;
+    const store = new LanceDbVectorStore(storeConfig);
+    await store.initialize();
+    await store.close();
+
+    const connection = await lancedb.connect(uri);
+    const table = await connection.openTable('vectors');
+    expect((await table.indexStats('vector_idx'))?.numUnindexedRows).toBe(0);
+    table.close();
+    connection.close();
+  });
+
   it('refreshes only the id B-tree after the scalar threshold', async () => {
     const uri = await createIndexedDatabase();
     installClickHouseMock([]);

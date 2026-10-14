@@ -152,7 +152,7 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
       const results = await embeddingService.search({
         vector: queryVector,
         k: request.body.k || 10,
-        threshold: request.body.threshold || 0.65,
+        threshold: request.body.threshold ?? 0.65,
         filter: request.body.filter,
         with_vector: request.body.with_vector ?? false,
         with_payload: request.body.with_payload ?? true,
