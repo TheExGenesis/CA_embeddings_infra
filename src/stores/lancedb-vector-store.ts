@@ -133,6 +133,17 @@ function matchesFilter(metadata: Record<string, unknown>, filter: SearchFilter):
   });
 }
 
+// Metadata a payload-free lookup still returns, so filters on it stay exact.
+const TEXTLESS_METADATA_KEYS = new Set(['account_id', 'created_at', 'username', 'account_display_name', 'source', 'provider', 'model']);
+
+function filterKeys(filter: SearchFilter): string[] {
+  const keys = Object.keys(filter);
+  if (!keys.some(key => key === 'must' || key === 'should' || key === 'must_not')) return keys;
+  const clause = filter as Filter;
+  return [...(clause.must ?? []), ...(clause.should ?? []), ...(clause.must_not ?? [])]
+    .flatMap(item => isFieldCondition(item) ? [item.key] : filterKeys(item));
+}
+
 function authorScope(filter: SearchFilter): AuthorScope | undefined {
   const isAuthorKey = (key: string): key is AuthorScope['key'] => key === 'username' || key === 'account_id';
   const keys = Object.keys(filter);
@@ -363,6 +374,8 @@ export class LanceDbVectorStore implements IVectorStore {
         if (authorIds.length <= EXACT_AUTHOR_SEARCH_MAX_TWEETS) search = search.bypassVectorIndex();
         return search.toArray();
       };
+      const withText = (query.with_payload ?? true)
+        || (query.filter !== undefined && filterKeys(query.filter).some(key => !TEXTLESS_METADATA_KEYS.has(key)));
       const resultsFrom = async (found: Record<string, unknown>[]): Promise<SearchResult[]> => {
         const results: SearchResult[] = [];
         const rows = query.threshold === undefined
@@ -375,7 +388,7 @@ export class LanceDbVectorStore implements IVectorStore {
           if (!chunk.length || results.length >= requested) break;
           // Canonical hydration is also the policy gate: absent, opted-out, and
           // tombstoned tweets never escape even when payload output is disabled.
-          const payloads = await this.tweets.retrievePayloads(chunk.map(row => String(row.id)));
+          const payloads = await this.tweets.retrievePayloads(chunk.map(row => String(row.id)), { withText });
           const payloadById = new Map(payloads.map(payload => [payload.id, payload]));
           for (const row of chunk) {
             const id = String(row.id);

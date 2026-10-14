@@ -216,6 +216,25 @@ describe('LanceDbVectorStore', () => {
     await store.close();
   });
 
+  it('skips text columns unless the payload or filter needs them', async () => {
+    const uri = await createIndexedDatabase();
+    const requests: string[] = [];
+    installClickHouseMock(requests);
+    const store = new LanceDbVectorStore(config(uri));
+    await store.initialize();
+    const hydrations = () => requests.filter(sql => sql.includes('tweet_content_versions AS t'));
+    const vector = new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]);
+
+    const bare = await store.search({ vector, k: 1, with_payload: false });
+    expect(bare[0]?.key).toBe('1');
+    expect(bare[0]?.metadata).toBeUndefined();
+    expect(hydrations().at(-1)).not.toContain('full_text');
+
+    await store.search({ vector, k: 1, with_payload: false, filter: { must: [{ key: 'text', match: { text: 'hello' } }] } });
+    expect(hydrations().at(-1)).toContain('full_text');
+    await store.close();
+  });
+
   it('indexes an unindexed tail left before a restart', async () => {
     const uri = await createIndexedDatabase();
     installClickHouseMock([]);

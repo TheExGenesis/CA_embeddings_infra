@@ -95,17 +95,20 @@ export class TweetClickHouseStore {
     return this.members.value;
   }
 
-  private async retrieveBatch(ids: string[], members: string): Promise<RetrievedPayload[]> {
+  private async retrieveBatch(ids: string[], members: string, withText: boolean): Promise<RetrievedPayload[]> {
     const joinedIds = ids.map(numericKey).join(',');
+    // Text and reply columns are most of each lookup's decompression work;
+    // the policy gate needs only the account and tombstone.
+    const textColumns = withText ? `
+        argMax(t.full_text, tuple(t.observed_at, t.source, t.event_id)) AS full_text,
+        toString(argMax(t.reply_to_tweet_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_tweet_id,
+        toString(argMax(t.reply_to_user_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_user_id,
+        argMax(t.reply_to_username, tuple(t.observed_at, t.source, t.event_id)) AS reply_to_username,` : '';
     const tweets = await this.rows(`
       SELECT
         toString(t.tweet_id) AS id,
         toString(argMax(t.account_id, tuple(t.observed_at, t.source, t.event_id))) AS account_id,
-        toString(argMax(t.created_at, tuple(t.observed_at, t.source, t.event_id))) AS created_at,
-        argMax(t.full_text, tuple(t.observed_at, t.source, t.event_id)) AS full_text,
-        toString(argMax(t.reply_to_tweet_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_tweet_id,
-        toString(argMax(t.reply_to_user_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_user_id,
-        argMax(t.reply_to_username, tuple(t.observed_at, t.source, t.event_id)) AS reply_to_username,
+        toString(argMax(t.created_at, tuple(t.observed_at, t.source, t.event_id))) AS created_at,${textColumns}
         argMax(t.is_tombstone, tuple(t.observed_at, t.source, t.event_id)) AS is_tombstone
       FROM ${this.database}.tweet_content_versions AS t
       WHERE t.tweet_id IN (${joinedIds})
@@ -130,12 +133,10 @@ export class TweetClickHouseStore {
     return tweets.map(row => {
       const id = String(row.id);
       const account = accountsById.get(String(row.account_id));
-      const text = String(row.full_text ?? '');
       const metadata: Record<string, unknown> = {
         account_id: String(row.account_id),
         created_at: String(row.created_at),
-        text,
-        original_text: text,
+        ...(withText ? { text: String(row.full_text ?? ''), original_text: String(row.full_text ?? '') } : {}),
         source: 'clickhouse',
         provider: 'deepinfra',
         model: 'Qwen/Qwen3-Embedding-4B',
@@ -152,7 +153,8 @@ export class TweetClickHouseStore {
     });
   }
 
-  async retrievePayloads(ids: string[]): Promise<RetrievedPayload[]> {
+  /** Policy-gated payloads; `withText: false` omits text and reply fields. */
+  async retrievePayloads(ids: string[], { withText = true }: { withText?: boolean } = {}): Promise<RetrievedPayload[]> {
     const unique = [...new Set(ids.map(numericKey))];
     const batches: string[][] = [];
     for (let offset = 0; offset < unique.length; offset += this.batchSize) {
@@ -161,7 +163,7 @@ export class TweetClickHouseStore {
     if (!batches.length) return [];
     const members = await this.memberAccountIds();
     if (!members) return [];
-    const results = await Promise.all(batches.map(batch => this.retrieveBatch(batch, members)));
+    const results = await Promise.all(batches.map(batch => this.retrieveBatch(batch, members, withText)));
     return results.flat();
   }
 
