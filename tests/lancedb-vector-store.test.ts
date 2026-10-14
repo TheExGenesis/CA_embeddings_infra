@@ -180,6 +180,42 @@ describe('LanceDbVectorStore', () => {
     await store.close();
   });
 
+  it('fills k for a prolific author and widens past policy-gated candidates', async () => {
+    const uri = await createIndexedDatabase();
+    const authored = Array.from({ length: 100 }, (_, index) => String(index + 2));
+    const visible = new Set(authored.filter(id => Number(id) % 5 === 0));
+    globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
+      const sql = String(init?.body ?? '');
+      if (sql.includes('FROM system.databases')) return new Response('{"ok":1}\n');
+      if (sql.includes('SELECT DISTINCT toString(account_id)')) return new Response('{"account_id":"10"}\n');
+      if (sql.includes('community_membership_by_account_current\n')) {
+        return new Response(authored.map(id => JSON.stringify({ id })).join('\n'));
+      }
+      if (sql.includes('FROM community_archive.tweet_content_versions')) {
+        // Only every fifth tweet survives the policy gate.
+        const ids = sql.match(/tweet_id IN \(([^)]*)\)/)?.[1]?.split(',') ?? [];
+        return new Response(ids.filter(id => visible.has(id)).map(id => JSON.stringify({ id, account_id: '10', created_at: '2026-01-01 00:00:00.000', full_text: `tweet ${id}`, is_tombstone: 0 })).join('\n'));
+      }
+      if (sql.includes('FROM community_archive.account_identity_states')) {
+        return new Response('{"account_id":"10","username":"alice","account_display_name":"Alice"}\n');
+      }
+      return new Response('');
+    }) as unknown as typeof fetch;
+    const store = new LanceDbVectorStore(config(uri));
+    await store.initialize();
+
+    const results = await store.search({
+      vector: new Float32Array([0, 1, 0, 0, 0, 0, 0, 0]),
+      k: 5,
+      threshold: 0,
+      filter: { must: [{ key: 'username', match: { value: 'alice' } }] },
+    });
+
+    expect(results).toHaveLength(5);
+    expect(results.every(result => visible.has(result.key))).toBe(true);
+    await store.close();
+  });
+
   it('indexes an unindexed tail left before a restart', async () => {
     const uri = await createIndexedDatabase();
     installClickHouseMock([]);

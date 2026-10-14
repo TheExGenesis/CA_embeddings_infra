@@ -37,6 +37,8 @@ type RetrievedPoint = {
 
 const NUMERIC_KEY = /^\d+$/;
 const EXACT_AUTHOR_SEARCH_MAX_TWEETS = 20_000;
+const LARGE_AUTHOR_SHARE = 0.005;
+const MAX_AUTHOR_SHORTLIST = 10_000;
 
 function parseNumericKey(key: string): string {
   if (!NUMERIC_KEY.test(key)) {
@@ -165,6 +167,7 @@ export class LanceDbVectorStore implements IVectorStore {
   private scalarModifiedRows = 0;
   private mutationOperations = 0;
   private optimizePromise?: Promise<void>;
+  private totalRows = 0;
   private scalarIndexRefreshPromise?: Promise<void>;
 
   constructor(config: DatabaseConfig) {
@@ -218,6 +221,7 @@ export class LanceDbVectorStore implements IVectorStore {
         // backlog is the index's view, not a counter that resets on restart.
         this.modifiedRows = Math.max(this.modifiedRows, stats.numUnindexedRows);
         const total = stats.numIndexedRows + stats.numUnindexedRows;
+        this.totalRows = total;
         collectionIndexedPercentage.set(
           { collection: this.tableName },
           total === 0 ? 100 : (stats.numIndexedRows / total) * 100,
@@ -346,47 +350,69 @@ export class LanceDbVectorStore implements IVectorStore {
         timer();
         return [];
       }
-      const candidateLimit = authorIds
+      const nearest = (limit: number) => this.currentTable()
+        .vectorSearch(query.vector)
+        .distanceType('cosine')
+        .nprobes(this.nprobes)
+        .refineFactor(this.refineFactor)
+        .select(columns)
+        .limit(limit);
+      const authorShare = authorIds && this.totalRows > 0 ? authorIds.length / this.totalRows : 0;
+      const candidates = async (limit: number): Promise<Record<string, unknown>[]> => {
+        if (!authorIds) return nearest(limit).toArray();
+        if (authorShare >= LARGE_AUTHOR_SHARE) {
+          // A prolific author's tweets are common enough in an archive-wide
+          // shortlist that intersecting it beats a huge id prefilter.
+          const authored = new Set(authorIds);
+          const shortlist = await nearest(Math.min(MAX_AUTHOR_SHORTLIST, Math.ceil(limit / authorShare)))
+            .toArray();
+          const rows = shortlist.filter(row => authored.has(String(row.id)));
+          if (rows.length >= limit) return rows.slice(0, limit);
+        }
+        let search = nearest(limit).where(`id IN (${authorIds.map(parseNumericKey).join(',')})`);
+        // Exact distances are cheaper than an index walk for small authors.
+        if (authorIds.length <= EXACT_AUTHOR_SEARCH_MAX_TWEETS) search = search.bypassVectorIndex();
+        return search.toArray();
+      };
+      const resultsFrom = async (rows: Record<string, unknown>[]): Promise<SearchResult[]> => {
+        // Canonical hydration is also the policy gate: absent, opted-out, and
+        // tombstoned tweets never escape even when payload output is disabled.
+        const payloads = await this.tweets.retrievePayloads(rows.map(row => String(row.id)));
+        const payloadById = new Map(payloads.map(payload => [payload.id, payload]));
+        return rows
+          .map(row => {
+            const id = String(row.id);
+            const score = 1 - Number(row._distance);
+            const payload = payloadById.get(id);
+            if (!payload?.metadata) return undefined;
+            if (query.filter && !matchesFilter(payload.metadata, query.filter)) return undefined;
+            return {
+              key: payload?.key ?? id,
+              distance: score,
+              ...((query.with_payload ?? true) && payload?.metadata ? { metadata: payload.metadata } : {}),
+              ...(query.with_vector ? { vector: vectorValues(row.vector) } : {}),
+            } satisfies SearchResult;
+          })
+          .filter((result): result is SearchResult => result !== undefined)
+          .filter(result => query.threshold === undefined || result.distance >= query.threshold)
+          .slice(0, requested);
+      };
+      let candidateLimit = authorIds
         ? requested * 2
         : query.filter
           ? Math.max(requested, this.filterCandidates)
           : Math.max(requested * 2, requested + 10);
-      let search = this.currentTable()
-        .vectorSearch(query.vector)
-        .distanceType('cosine')
-        .nprobes(this.nprobes)
-        .refineFactor(this.refineFactor);
-      if (authorIds) {
-        search = search.where(`id IN (${authorIds.map(parseNumericKey).join(',')})`);
-        // Exact distances are cheaper than an index walk for small authors.
-        if (authorIds.length <= EXACT_AUTHOR_SEARCH_MAX_TWEETS) search = search.bypassVectorIndex();
+      let rows = await candidates(candidateLimit);
+      let results = await resultsFrom(rows);
+      // The policy gate can drop many candidates (non-members' tweets are
+      // indexed too); widen once rather than return fewer than k.
+      const belowThreshold = query.threshold !== undefined && rows.length > 0
+        && 1 - Number(rows[rows.length - 1]!._distance) < query.threshold;
+      if (results.length < requested && rows.length >= candidateLimit && !belowThreshold) {
+        candidateLimit *= 4;
+        rows = await candidates(candidateLimit);
+        results = await resultsFrom(rows);
       }
-      const rows = await search
-        .select(columns)
-        .limit(candidateLimit)
-        .toArray();
-      const ids = rows.map(row => String(row.id));
-      // Canonical hydration is also the policy gate: absent, opted-out, and
-      // tombstoned tweets never escape even when payload output is disabled.
-      const payloads = await this.tweets.retrievePayloads(ids);
-      const payloadById = new Map(payloads.map(payload => [payload.id, payload]));
-      const results = rows
-        .map(row => {
-          const id = String(row.id);
-          const score = 1 - Number(row._distance);
-          const payload = payloadById.get(id);
-          if (!payload?.metadata) return undefined;
-          if (query.filter && !matchesFilter(payload.metadata, query.filter)) return undefined;
-          return {
-            key: payload?.key ?? id,
-            distance: score,
-            ...((query.with_payload ?? true) && payload?.metadata ? { metadata: payload.metadata } : {}),
-            ...(query.with_vector ? { vector: vectorValues(row.vector) } : {}),
-          } satisfies SearchResult;
-        })
-        .filter((result): result is SearchResult => result !== undefined)
-        .filter(result => query.threshold === undefined || result.distance >= query.threshold)
-        .slice(0, requested);
       if (query.filter) lanceDbFilteredSearchTotal.inc();
       const elapsed = timer();
       logger.info({ resultCount: results.length, queryTime: elapsed }, 'Vector search completed');
