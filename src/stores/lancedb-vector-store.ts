@@ -363,28 +363,35 @@ export class LanceDbVectorStore implements IVectorStore {
         if (authorIds.length <= EXACT_AUTHOR_SEARCH_MAX_TWEETS) search = search.bypassVectorIndex();
         return search.toArray();
       };
-      const resultsFrom = async (rows: Record<string, unknown>[]): Promise<SearchResult[]> => {
-        // Canonical hydration is also the policy gate: absent, opted-out, and
-        // tombstoned tweets never escape even when payload output is disabled.
-        const payloads = await this.tweets.retrievePayloads(rows.map(row => String(row.id)));
-        const payloadById = new Map(payloads.map(payload => [payload.id, payload]));
-        return rows
-          .map(row => {
+      const resultsFrom = async (found: Record<string, unknown>[]): Promise<SearchResult[]> => {
+        const results: SearchResult[] = [];
+        const rows = query.threshold === undefined
+          ? found
+          : found.filter(row => 1 - Number(row._distance) >= query.threshold!);
+        // Lookup cost grows with the number of ids, so hydrate the nearest
+        // candidates first and reach further only when the gate drops some.
+        const firstChunk = requested + Math.max(5, Math.ceil(requested * 0.2));
+        for (const chunk of [rows.slice(0, firstChunk), rows.slice(firstChunk)]) {
+          if (!chunk.length || results.length >= requested) break;
+          // Canonical hydration is also the policy gate: absent, opted-out, and
+          // tombstoned tweets never escape even when payload output is disabled.
+          const payloads = await this.tweets.retrievePayloads(chunk.map(row => String(row.id)));
+          const payloadById = new Map(payloads.map(payload => [payload.id, payload]));
+          for (const row of chunk) {
             const id = String(row.id);
             const score = 1 - Number(row._distance);
             const payload = payloadById.get(id);
-            if (!payload?.metadata) return undefined;
-            if (query.filter && !matchesFilter(payload.metadata, query.filter)) return undefined;
-            return {
+            if (!payload?.metadata) continue;
+            if (query.filter && !matchesFilter(payload.metadata, query.filter)) continue;
+            results.push({
               key: payload?.key ?? id,
               distance: score,
               ...((query.with_payload ?? true) && payload?.metadata ? { metadata: payload.metadata } : {}),
               ...(query.with_vector ? { vector: vectorValues(row.vector) } : {}),
-            } satisfies SearchResult;
-          })
-          .filter((result): result is SearchResult => result !== undefined)
-          .filter(result => query.threshold === undefined || result.distance >= query.threshold)
-          .slice(0, requested);
+            } satisfies SearchResult);
+          }
+        }
+        return results.slice(0, requested);
       };
       let candidateLimit = authorIds
         ? requested * 2
