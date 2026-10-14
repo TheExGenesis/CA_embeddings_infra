@@ -180,7 +180,7 @@ describe('LanceDbVectorStore', () => {
     await store.close();
   });
 
-  it('fills k for a prolific author and widens past policy-gated candidates', async () => {
+  it('widens past policy-gated candidates to fill k', async () => {
     const uri = await createIndexedDatabase();
     const authored = Array.from({ length: 100 }, (_, index) => String(index + 2));
     const visible = new Set(authored.filter(id => Number(id) % 5 === 0));

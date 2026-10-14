@@ -37,8 +37,6 @@ type RetrievedPoint = {
 
 const NUMERIC_KEY = /^\d+$/;
 const EXACT_AUTHOR_SEARCH_MAX_TWEETS = 20_000;
-const LARGE_AUTHOR_SHARE = 0.005;
-const MAX_AUTHOR_SHORTLIST = 10_000;
 
 function parseNumericKey(key: string): string {
   if (!NUMERIC_KEY.test(key)) {
@@ -167,7 +165,6 @@ export class LanceDbVectorStore implements IVectorStore {
   private scalarModifiedRows = 0;
   private mutationOperations = 0;
   private optimizePromise?: Promise<void>;
-  private totalRows = 0;
   private scalarIndexRefreshPromise?: Promise<void>;
 
   constructor(config: DatabaseConfig) {
@@ -221,7 +218,6 @@ export class LanceDbVectorStore implements IVectorStore {
         // backlog is the index's view, not a counter that resets on restart.
         this.modifiedRows = Math.max(this.modifiedRows, stats.numUnindexedRows);
         const total = stats.numIndexedRows + stats.numUnindexedRows;
-        this.totalRows = total;
         collectionIndexedPercentage.set(
           { collection: this.tableName },
           total === 0 ? 100 : (stats.numIndexedRows / total) * 100,
@@ -357,18 +353,8 @@ export class LanceDbVectorStore implements IVectorStore {
         .refineFactor(this.refineFactor)
         .select(columns)
         .limit(limit);
-      const authorShare = authorIds && this.totalRows > 0 ? authorIds.length / this.totalRows : 0;
       const candidates = async (limit: number): Promise<Record<string, unknown>[]> => {
         if (!authorIds) return nearest(limit).toArray();
-        if (authorShare >= LARGE_AUTHOR_SHARE) {
-          // A prolific author's tweets are common enough in an archive-wide
-          // shortlist that intersecting it beats a huge id prefilter.
-          const authored = new Set(authorIds);
-          const shortlist = await nearest(Math.min(MAX_AUTHOR_SHORTLIST, Math.ceil(limit / authorShare)))
-            .toArray();
-          const rows = shortlist.filter(row => authored.has(String(row.id)));
-          if (rows.length >= limit) return rows.slice(0, limit);
-        }
         let search = nearest(limit).where(`id IN (${authorIds.map(parseNumericKey).join(',')})`);
         // Exact distances are cheaper than an index walk for small authors.
         if (authorIds.length <= EXACT_AUTHOR_SEARCH_MAX_TWEETS) search = search.bypassVectorIndex();
