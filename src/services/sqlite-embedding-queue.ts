@@ -157,7 +157,7 @@ export class SqliteEmbeddingQueue {
   }
 
   private async processPendingBatch(): Promise<{ processed: number; failed: number }> {
-    const batchSize = 1000;
+    const batchSize = this.insertChunkSize;
 
     // Get pending batch
     const rows = this.db.query(`

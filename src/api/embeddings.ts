@@ -6,13 +6,15 @@ import {
   SearchQuerySchema,
   UpdateMetadataSchema,
   RetrieveVectorSchema,
+  ExistingKeysSchema,
   validateVector,
   normalizeVector,
   type BulkInsertInput,
   type BulkDeleteInput,
   type SearchQueryInput,
   type UpdateMetadataInput,
-  type RetrieveVectorInput
+  type RetrieveVectorInput,
+  type ExistingKeysInput
 } from '../utils/validation.js';
 import { createContextLogger } from '../observability/logger.js';
 import { appConfig } from '../config/index.js';
@@ -22,6 +24,28 @@ import path from 'node:path';
 import {
   getSearchAttribution,
 } from '../utils/search-observability.js';
+
+// Agents often repeat a search term; each repeat would otherwise pay a
+// 0.2-1.5 s embedding round trip.
+const QUERY_EMBEDDING_CACHE_ENTRIES = 512;
+const queryEmbeddings = new Map<string, Float32Array>();
+
+function cachedQueryEmbedding(term: string): Float32Array | undefined {
+  const vector = queryEmbeddings.get(term);
+  if (vector) {
+    queryEmbeddings.delete(term);
+    queryEmbeddings.set(term, vector);
+  }
+  return vector;
+}
+
+function cacheQueryEmbedding(term: string, vector: Float32Array): void {
+  queryEmbeddings.set(term, vector);
+  for (const oldest of queryEmbeddings.keys()) {
+    if (queryEmbeddings.size <= QUERY_EMBEDDING_CACHE_ENTRIES) break;
+    queryEmbeddings.delete(oldest);
+  }
+}
 
 // Track active export process
 let activeExportProcess: ChildProcess | null = null;
@@ -33,6 +57,22 @@ interface EmbeddingRoutes {
 }
 
 const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { embeddingService }) => {
+
+  fastify.post<{
+    Body: ExistingKeysInput;
+  }>('/embeddings/exists', {
+    preHandler: apiKeyAuthMiddleware
+  }, async (request: FastifyRequest<{ Body: ExistingKeysInput }>, reply: FastifyReply) => {
+    const parsed = ExistingKeysSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ success: false, error: 'Invalid request body', details: parsed.error.errors });
+    }
+    if (!embeddingService.existingKeys) {
+      return reply.status(501).send({ success: false, error: 'Batch existence checks are not supported' });
+    }
+    const existing = await embeddingService.existingKeys(parsed.data.ids);
+    return reply.send({ success: true, existing, count: existing.length });
+  });
 
   fastify.post<{
     Body: BulkInsertInput;
@@ -104,29 +144,36 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
         queryVector = new Float32Array(request.body.vector);
         contextLogger.info('Using provided vector for search');
       } else if (request.body.searchTerm) {
-        // Text-based search - generate embedding first
-        contextLogger.info('Generating embedding for search term');
+        const cached = cachedQueryEmbedding(request.body.searchTerm);
+        if (cached) {
+          queryVector = cached;
+          contextLogger.info('Using cached embedding for search term');
+        } else {
+          // Text-based search - generate embedding first
+          contextLogger.info('Generating embedding for search term');
 
-        // Get embedding generation service from the context
-        const embeddingGenerationService = (fastify as any).embeddingGenerationService;
-        if (!embeddingGenerationService) {
-          throw new Error('Embedding generation service not available. Please ensure it is enabled in the server configuration.');
+          // Get embedding generation service from the context
+          const embeddingGenerationService = (fastify as any).embeddingGenerationService;
+          if (!embeddingGenerationService) {
+            throw new Error('Embedding generation service not available. Please ensure it is enabled in the server configuration.');
+          }
+
+          // Generate embedding for the search term
+          const generationResults = await embeddingGenerationService.generateEmbeddings([{
+            key: `search_query_${Date.now()}`,
+            content: request.body.searchTerm,
+            contentType: 'text' as const,
+            metadata: { type: 'search_query' }
+          }]);
+
+          if (generationResults.length === 0) {
+            throw new Error('Failed to generate embedding for search term');
+          }
+
+          queryVector = new Float32Array(generationResults[0].vector);
+          cacheQueryEmbedding(request.body.searchTerm, queryVector);
+          contextLogger.info('Embedding generated successfully for search term');
         }
-
-        // Generate embedding for the search term
-        const generationResults = await embeddingGenerationService.generateEmbeddings([{
-          key: `search_query_${Date.now()}`,
-          content: request.body.searchTerm,
-          contentType: 'text' as const,
-          metadata: { type: 'search_query' }
-        }]);
-
-        if (generationResults.length === 0) {
-          throw new Error('Failed to generate embedding for search term');
-        }
-
-        queryVector = new Float32Array(generationResults[0].vector);
-        contextLogger.info('Embedding generated successfully for search term');
       } else {
         throw new Error('Either vector or searchTerm must be provided');
       }
@@ -134,7 +181,7 @@ const embeddingRoutes: FastifyPluginAsync<EmbeddingRoutes> = async (fastify, { e
       const results = await embeddingService.search({
         vector: queryVector,
         k: request.body.k || 10,
-        threshold: request.body.threshold || 0.65,
+        threshold: request.body.threshold ?? 0.65,
         filter: request.body.filter,
         with_vector: request.body.with_vector ?? false,
         with_payload: request.body.with_payload ?? true,

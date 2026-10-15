@@ -29,6 +29,9 @@ export interface IVectorStore {
    */
   delete(keys: string[]): Promise<void>;
 
+  /** Return the subset of keys already present, for idempotent ingestion. */
+  existingKeys?(keys: string[]): Promise<string[]>;
+
   /**
    * Get database statistics
    * @returns Statistics about vector count and database size
@@ -40,4 +43,3 @@ export interface IVectorStore {
    */
   close(): Promise<void>;
 }
-

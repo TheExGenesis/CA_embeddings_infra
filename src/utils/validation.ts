@@ -156,6 +156,7 @@ export const EmbeddingGenerationItemSchema = z.object({
 
 export const GenerateEmbeddingsSchema = z.object({
   items: z.array(EmbeddingGenerationItemSchema).min(1).max(1000),
+  return_vectors: z.boolean().optional().default(true),
 });
 
 // ============================================================================
@@ -190,6 +191,10 @@ export const RetrieveVectorSchema = z.object({
   with_payload: z.boolean().optional().default(true),
 });
 
+export const ExistingKeysSchema = z.object({
+  ids: z.array(z.string().regex(/^\d+$/)).min(1).max(1000),
+});
+
 export const validateVector = (vector: number[], expectedDimension: number): void => {
   if (vector.length !== expectedDimension) {
     throw new Error(`Vector dimension mismatch. Expected ${expectedDimension}, got ${vector.length}`);
@@ -219,3 +224,4 @@ export type GenerateEmbeddingsInput = z.infer<typeof GenerateEmbeddingsSchema>;
 export type MetadataUpdateItemInput = z.infer<typeof MetadataUpdateItemSchema>;
 export type UpdateMetadataInput = z.infer<typeof UpdateMetadataSchema>;
 export type RetrieveVectorInput = z.infer<typeof RetrieveVectorSchema>;
+export type ExistingKeysInput = z.infer<typeof ExistingKeysSchema>;
