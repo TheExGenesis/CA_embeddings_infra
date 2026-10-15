@@ -21,6 +21,20 @@ function identifier(value: string): string {
   return value;
 }
 
+function stringLiteral(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+export type AuthorScope = { key: 'username' | 'account_id'; value: string };
+
+// Short enough that an opt-out reaching the membership projection takes
+// effect within a minute; long enough that searches stop rescanning it.
+const MEMBER_CACHE_MS = 30_000;
+const AUTHOR_CACHE_MS = 60_000;
+const AUTHOR_CACHE_ENTRIES = 32;
+
+type Cached<T> = { expires: number; value: Promise<T> };
+
 function nullableString(value: unknown): string | undefined {
   if (value === null || value === undefined || value === '') return undefined;
   return String(value);
@@ -33,6 +47,8 @@ export class TweetClickHouseStore {
   private readonly database: string;
   private readonly timeout: number;
   private readonly batchSize: number;
+  private members?: Cached<string>;
+  private readonly authors = new Map<string, Cached<string[]>>();
 
   constructor(config: DatabaseConfig) {
     if (!config.tweetClickhouse) throw new Error('Canonical tweet ClickHouse configuration is required for LanceDB');
@@ -64,24 +80,39 @@ export class TweetClickHouseStore {
     await this.rows(`SELECT 1 AS ok FROM system.databases WHERE name = '${this.database}' LIMIT 1`);
   }
 
-  private async retrieveBatch(ids: string[]): Promise<RetrievedPayload[]> {
+  /** Comma-separated account IDs of current members who have not opted out. */
+  private memberAccountIds(): Promise<string> {
+    const now = Date.now();
+    if (!this.members || this.members.expires <= now) {
+      const value = this.rows(`
+        SELECT DISTINCT toString(account_id) AS account_id
+        FROM ${this.database}.community_membership_by_account_current
+        WHERE is_member = 1 AND explicit_optout = 0
+      `).then(rows => rows.map(row => numericKey(String(row.account_id))).join(','));
+      this.members = { expires: now + MEMBER_CACHE_MS, value };
+      value.catch(() => { if (this.members?.value === value) this.members = undefined; });
+    }
+    return this.members.value;
+  }
+
+  private async retrieveBatch(ids: string[], members: string, withText: boolean): Promise<RetrievedPayload[]> {
     const joinedIds = ids.map(numericKey).join(',');
+    // Text and reply columns are most of each lookup's decompression work;
+    // the policy gate needs only the account and tombstone.
+    const textColumns = withText ? `
+        argMax(t.full_text, tuple(t.observed_at, t.source, t.event_id)) AS full_text,
+        toString(argMax(t.reply_to_tweet_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_tweet_id,
+        toString(argMax(t.reply_to_user_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_user_id,
+        argMax(t.reply_to_username, tuple(t.observed_at, t.source, t.event_id)) AS reply_to_username,` : '';
     const tweets = await this.rows(`
       SELECT
         toString(t.tweet_id) AS id,
         toString(argMax(t.account_id, tuple(t.observed_at, t.source, t.event_id))) AS account_id,
-        toString(argMax(t.created_at, tuple(t.observed_at, t.source, t.event_id))) AS created_at,
-        argMax(t.full_text, tuple(t.observed_at, t.source, t.event_id)) AS full_text,
-        toString(argMax(t.reply_to_tweet_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_tweet_id,
-        toString(argMax(t.reply_to_user_id, tuple(t.observed_at, t.source, t.event_id))) AS reply_to_user_id,
-        argMax(t.reply_to_username, tuple(t.observed_at, t.source, t.event_id)) AS reply_to_username,
+        toString(argMax(t.created_at, tuple(t.observed_at, t.source, t.event_id))) AS created_at,${textColumns}
         argMax(t.is_tombstone, tuple(t.observed_at, t.source, t.event_id)) AS is_tombstone
       FROM ${this.database}.tweet_content_versions AS t
-      INNER JOIN ${this.database}.community_membership_by_account_current AS membership
-        ON membership.account_id = t.account_id
       WHERE t.tweet_id IN (${joinedIds})
-        AND membership.is_member = 1
-        AND membership.explicit_optout = 0
+        AND t.account_id IN (${members})
       GROUP BY t.tweet_id
       HAVING is_tombstone = 0
     `);
@@ -102,12 +133,10 @@ export class TweetClickHouseStore {
     return tweets.map(row => {
       const id = String(row.id);
       const account = accountsById.get(String(row.account_id));
-      const text = String(row.full_text ?? '');
       const metadata: Record<string, unknown> = {
         account_id: String(row.account_id),
         created_at: String(row.created_at),
-        text,
-        original_text: text,
+        ...(withText ? { text: String(row.full_text ?? ''), original_text: String(row.full_text ?? '') } : {}),
         source: 'clickhouse',
         provider: 'deepinfra',
         model: 'Qwen/Qwen3-Embedding-4B',
@@ -124,14 +153,46 @@ export class TweetClickHouseStore {
     });
   }
 
-  async retrievePayloads(ids: string[]): Promise<RetrievedPayload[]> {
+  /** Policy-gated payloads; `withText: false` omits text and reply fields. */
+  async retrievePayloads(ids: string[], { withText = true }: { withText?: boolean } = {}): Promise<RetrievedPayload[]> {
     const unique = [...new Set(ids.map(numericKey))];
     const batches: string[][] = [];
     for (let offset = 0; offset < unique.length; offset += this.batchSize) {
       batches.push(unique.slice(offset, offset + this.batchSize));
     }
-    const results = await Promise.all(batches.map(batch => this.retrieveBatch(batch)));
+    if (!batches.length) return [];
+    const members = await this.memberAccountIds();
+    if (!members) return [];
+    const results = await Promise.all(batches.map(batch => this.retrieveBatch(batch, members, withText)));
     return results.flat();
+  }
+
+  /** Tweet IDs of one current, non-opted-out member, or [] when the author is not one. */
+  authorTweetIds(author: AuthorScope): Promise<string[]> {
+    const key = `${author.key}:${author.key === 'username' ? author.value.toLowerCase() : author.value}`;
+    const now = Date.now();
+    const cached = this.authors.get(key);
+    if (cached && cached.expires > now) return cached.value;
+    const member = author.key === 'account_id'
+      ? `account_id = ${numericKey(author.value)}`
+      : `username_lower = lower(${stringLiteral(author.value)})`;
+    const value = this.rows(`
+      SELECT DISTINCT toString(tweet_id) AS id
+      FROM ${this.database}.tweet_content_versions
+      WHERE account_id IN (
+        SELECT account_id
+        FROM ${this.database}.community_membership_by_account_current
+        WHERE ${member} AND is_member = 1 AND explicit_optout = 0
+      )
+    `).then(rows => rows.map(row => String(row.id)));
+    this.authors.delete(key);
+    this.authors.set(key, { expires: now + AUTHOR_CACHE_MS, value });
+    value.catch(() => { if (this.authors.get(key)?.value === value) this.authors.delete(key); });
+    for (const oldest of this.authors.keys()) {
+      if (this.authors.size <= AUTHOR_CACHE_ENTRIES) break;
+      this.authors.delete(oldest);
+    }
+    return value;
   }
 
   async close(): Promise<void> {}

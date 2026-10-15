@@ -12,11 +12,16 @@ vector index and receives no vector writes.
 - Index: cosine `IVF_RQ`, one bit per dimension, 4,096 partitions
 - Scalar index: `BTree` on `id` for point reads, upserts, and deletes
 - Search: 64 IVF probes and refinement factor 2
-- Automatic optimization: disabled during historical bulk loading; run one
-  controlled `optimize()` after the backfill
+- Automatic optimization: enabled outside historical bulk loads. Rows the
+  vector index does not cover are brute-force scanned on every search; a
+  4 million row tail made each search take about 20 s. The API seeds its
+  optimize backlog from the index's unindexed-row count, so restarts do not
+  reset it.
 - Payloads and policy: hydrated from canonical tweet projections in ClickHouse
-- Filtered vector searches: bounded Lance candidate search, then canonical
-  metadata filtering
+- Filtered vector searches: a `username` or `account_id` match searches only
+  that member's tweets (exact distances up to 20,000 tweets, prefiltered IVF
+  above), so it returns k results whenever the member has k. Other filters
+  use a bounded Lance candidate search, then canonical metadata filtering.
 - Inserts and deletes: LanceDB only
 - Index maintenance: background `optimize()` after 100,000 modified rows or
   1,000 mutation operations
@@ -30,10 +35,10 @@ LANCEDB_URI=/data/lancedb/db
 LANCEDB_TABLE=vectors
 LANCEDB_NPROBES=64
 LANCEDB_REFINE_FACTOR=2
-LANCEDB_AUTO_OPTIMIZE=false
+LANCEDB_AUTO_OPTIMIZE=true
 TWEET_CLICKHOUSE_URL=http://127.0.0.1:18123
 TWEET_CLICKHOUSE_DATABASE=community_archive
-LANCEDB_OPTIMIZE_AFTER_ROWS=100000
+LANCEDB_OPTIMIZE_AFTER_ROWS=50000
 LANCEDB_OPTIMIZE_AFTER_MUTATIONS=1000
 ```
 
