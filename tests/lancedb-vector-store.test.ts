@@ -60,6 +60,7 @@ function config(uri: string): DatabaseConfig {
       scalarIndexRefreshAfterRows: 100_000,
       optimizeAfterRows: 100_000,
       optimizeAfterMutations: 20,
+      optimizeRetainHours: 24,
     },
     tweetClickhouse: {
       url: 'http://canonical-clickhouse:8123',
@@ -254,6 +255,34 @@ describe('LanceDbVectorStore', () => {
     const connection = await lancedb.connect(uri);
     const table = await connection.openTable('vectors');
     expect((await table.indexStats('vector_idx'))?.numUnindexedRows).toBe(0);
+    table.close();
+    connection.close();
+  });
+
+  it('prunes superseded versions older than the retention window after optimize', async () => {
+    const uri = await createIndexedDatabase();
+    installClickHouseMock([]);
+    const before = await lancedb.connect(uri);
+    const beforeTable = await before.openTable('vectors');
+    await beforeTable.add([{ id: 513n, vector: [0, 0, 1, 0, 0, 0, 0, 0] }]);
+    const versionsBefore = (await beforeTable.listVersions()).length;
+    expect(versionsBefore).toBeGreaterThan(1);
+    beforeTable.close();
+    before.close();
+
+    const storeConfig = config(uri);
+    storeConfig.lancedb!.optimizeAfterRows = 1;
+    storeConfig.lancedb!.optimizeRetainHours = 0;
+    const store = new LanceDbVectorStore(storeConfig);
+    await store.initialize();
+    await store.close();
+
+    const connection = await lancedb.connect(uri);
+    const table = await connection.openTable('vectors');
+    // Lance keeps the version that was current when cleanup ran.
+    const remaining = await table.listVersions();
+    expect(remaining.length).toBeLessThan(versionsBefore);
+    expect(remaining.every(version => version.version >= versionsBefore)).toBe(true);
     table.close();
     connection.close();
   });

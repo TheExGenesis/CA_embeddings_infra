@@ -39,6 +39,10 @@ const envSchema = z.object({
   LANCEDB_SCALAR_INDEX_REFRESH_AFTER_ROWS: z.string().default('0').transform(Number),
   LANCEDB_OPTIMIZE_AFTER_ROWS: z.string().default('100000').transform(Number),
   LANCEDB_OPTIMIZE_AFTER_MUTATIONS: z.string().default('1000').transform(Number),
+  // Superseded versions kept after a background optimize. Each optimize can
+  // write a new full vector-index generation, so LanceDB's 7-day default
+  // retains several copies of the index on disk.
+  LANCEDB_OPTIMIZE_RETAIN_HOURS: z.string().default('24').transform(Number),
 
   // Canonical tweet projection used for read-only payload hydration.
   TWEET_CLICKHOUSE_URL: z.string().default('http://localhost:18123'),
@@ -136,6 +140,7 @@ export const appConfig: AppConfig = {
       scalarIndexRefreshAfterRows: env.LANCEDB_SCALAR_INDEX_REFRESH_AFTER_ROWS,
       optimizeAfterRows: env.LANCEDB_OPTIMIZE_AFTER_ROWS,
       optimizeAfterMutations: env.LANCEDB_OPTIMIZE_AFTER_MUTATIONS,
+      optimizeRetainHours: env.LANCEDB_OPTIMIZE_RETAIN_HOURS,
     },
     tweetClickhouse: {
       url: env.TWEET_CLICKHOUSE_URL,
