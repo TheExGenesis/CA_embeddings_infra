@@ -24,7 +24,10 @@ vector index and receives no vector writes.
   use a bounded Lance candidate search, then canonical metadata filtering.
 - Inserts and deletes: LanceDB only
 - Index maintenance: background `optimize()` after 100,000 modified rows or
-  1,000 mutation operations
+  1,000 mutation operations, then deletes versions older than
+  `LANCEDB_OPTIMIZE_RETAIN_HOURS` (default 24). Each optimize can write a
+  new full IVF-RQ generation of several GiB, so LanceDB's 7-day default
+  filled the production disk.
 - Concurrency: exactly one writable API container may mount the local database
 
 Set:
@@ -40,6 +43,7 @@ TWEET_CLICKHOUSE_URL=http://127.0.0.1:18123
 TWEET_CLICKHOUSE_DATABASE=community_archive
 LANCEDB_OPTIMIZE_AFTER_ROWS=50000
 LANCEDB_OPTIMIZE_AFTER_MUTATIONS=1000
+LANCEDB_OPTIMIZE_RETAIN_HOURS=24
 ```
 
 Use a read-only ClickHouse account for the `TWEET_CLICKHOUSE_*` settings. Mount

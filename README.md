@@ -226,6 +226,7 @@ GET /metrics             # Prometheus metrics
 | `LANCEDB_AUTO_OPTIMIZE` | `true` | Run automatic compaction/index maintenance after mutation thresholds |
 | `LANCEDB_OPTIMIZE_AFTER_ROWS` | `100000` | Modified-row threshold for background optimize |
 | `LANCEDB_OPTIMIZE_AFTER_MUTATIONS` | `1000` | Mutation-operation threshold for background optimize |
+| `LANCEDB_OPTIMIZE_RETAIN_HOURS` | `24` | Superseded versions kept after background optimize; each optimize can write a full new vector-index generation |
 | `TWEET_CLICKHOUSE_URL` | `http://localhost:18123` | Read-only canonical tweet ClickHouse endpoint |
 | `TWEET_CLICKHOUSE_USER` | `default` | Canonical tweet ClickHouse user |
 | `TWEET_CLICKHOUSE_PASSWORD` | - | Canonical tweet ClickHouse password |

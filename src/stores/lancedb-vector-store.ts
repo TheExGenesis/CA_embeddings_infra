@@ -169,6 +169,7 @@ export class LanceDbVectorStore implements IVectorStore {
   private readonly filterCandidates: number;
   private readonly optimizeAfterRows: number;
   private readonly optimizeAfterMutations: number;
+  private readonly optimizeRetainMs: number;
   private readonly tweets: TweetClickHouseStore;
   private connection?: Connection;
   private table?: Table;
@@ -191,6 +192,7 @@ export class LanceDbVectorStore implements IVectorStore {
     this.filterCandidates = Math.max(1, Math.floor(config.tweetClickhouse.filterCandidates));
     this.optimizeAfterRows = Math.max(1, Math.floor(config.lancedb.optimizeAfterRows));
     this.optimizeAfterMutations = Math.max(1, Math.floor(config.lancedb.optimizeAfterMutations));
+    this.optimizeRetainMs = Math.max(0, config.lancedb.optimizeRetainHours) * 3_600_000;
     this.tweets = new TweetClickHouseStore(config);
   }
 
@@ -298,7 +300,7 @@ export class LanceDbVectorStore implements IVectorStore {
     const rowsAtStart = this.modifiedRows;
     const operationsAtStart = this.mutationOperations;
     try {
-      await this.currentTable().optimize();
+      await this.currentTable().optimize({ cleanupOlderThan: new Date(Date.now() - this.optimizeRetainMs) });
       this.modifiedRows = Math.max(0, this.modifiedRows - rowsAtStart);
       this.mutationOperations = Math.max(0, this.mutationOperations - operationsAtStart);
       await this.updateIndexMetrics();

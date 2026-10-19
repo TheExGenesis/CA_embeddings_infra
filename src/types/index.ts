@@ -129,6 +129,7 @@ export interface LanceDbConfig {
   scalarIndexRefreshAfterRows: number;
   optimizeAfterRows: number;
   optimizeAfterMutations: number;
+  optimizeRetainHours: number;
 }
 
 export interface TweetClickHouseConfig {
